@@ -1,0 +1,175 @@
+"""SQLAlchemy database models for Sofia Real Estate Agent."""
+
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    Float,
+    String,
+    Text,
+    DateTime,
+    Boolean,
+    ForeignKey,
+    Index,
+)
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.sql import func
+
+from src.config import DATABASE_URL
+
+Base = declarative_base()
+
+
+class Listing(Base):
+    """Real estate listing model."""
+    
+    __tablename__ = "listings"
+    
+    id = Column(Integer, primary_key=True)
+    source = Column(String(20), nullable=False, index=True)  # imotbg, homesbg
+    source_id = Column(String(100), nullable=False)
+    
+    # Cross-source deduplication
+    canonical_id = Column(String(16), index=True)  # Fingerprint-based unique ID
+    is_duplicate = Column(Boolean, default=False)  # Marked as duplicate of another listing
+    duplicate_of = Column(String(100))  # source_id of the primary listing
+    
+    url = Column(Text, nullable=False)
+    title = Column(Text)
+    
+    # Pricing
+    price_bgn = Column(Float)
+    price_eur = Column(Float, nullable=False)
+    area_sqm = Column(Float, nullable=False)
+    price_per_sqm_eur = Column(Float, nullable=False, index=True)
+    
+    # Location
+    neighborhood = Column(String(100), nullable=False, index=True)
+    
+    # Property details
+    property_type = Column(String(20), nullable=False, index=True)  # apartment, plot, house
+    rooms = Column(Integer)
+    floor = Column(Integer)
+    total_floors = Column(Integer)
+    construction_type = Column(String(20))  # brick, panel, epk
+    year_built = Column(Integer)
+    furnishing = Column(String(30))  # furnished, partial, unfurnished
+    heating = Column(String(30))  # central, local, electric, gas
+    
+    # Description
+    description = Column(Text)
+    
+    # Price tracking
+    first_price_eur = Column(Float)
+    price_changes = Column(Integer, default=0)
+    is_sold = Column(Boolean, default=False)
+    sold_date = Column(DateTime)
+    days_on_market = Column(Integer)
+    
+    # Metadata
+    first_seen = Column(DateTime, default=func.now())
+    last_seen = Column(DateTime, default=func.now(), onupdate=func.now())
+    is_active = Column(Boolean, default=True)
+    
+    # Relationships
+    price_history = relationship("PriceHistory", back_populates="listing", cascade="all, delete-orphan")
+    alerts = relationship("Alert", back_populates="listing", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index("idx_listing_source_source_id", "source", "source_id", unique=True),
+        Index("idx_listing_neighborhood_type", "neighborhood", "property_type"),
+        Index("idx_listing_canonical", "canonical_id"),
+    )
+    
+    def __repr__(self):
+        return f"<Listing({self.source}:{self.source_id} €{self.price_eur:,.0f})>"
+
+
+class PriceHistory(Base):
+    """Price history for listings."""
+    
+    __tablename__ = "price_history"
+    
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False, index=True)
+    price_eur = Column(Float, nullable=False)
+    price_per_sqm_eur = Column(Float, nullable=False)
+    recorded_at = Column(DateTime, default=func.now())
+    
+    # Relationship
+    listing = relationship("Listing", back_populates="price_history")
+    
+    def __repr__(self):
+        return f"<PriceHistory(listing_id={self.listing_id} €{self.price_eur:,.0f})>"
+
+
+class Neighborhood(Base):
+    """Neighborhood statistics."""
+    
+    __tablename__ = "neighborhoods"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)
+    name_bg = Column(String(100))
+    zone = Column(String(20))  # center, south, east, north, west
+    
+    # Statistics
+    avg_price_per_sqm = Column(Float)
+    median_price_per_sqm = Column(Float)
+    listing_count = Column(Integer, default=0)
+    
+    # Unique listings count (after deduplication)
+    unique_listing_count = Column(Integer, default=0)
+    
+    # Metadata
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self):
+        return f"<Neighborhood({self.name} €{self.avg_price_per_sqm or 0:.0f}/m²)>"
+
+
+class Alert(Base):
+    """Alert tracking for deals."""
+    
+    __tablename__ = "alerts"
+    
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False, index=True)
+    alert_type = Column(String(20), nullable=False)  # underpriced, price_drop, new_listing
+    
+    # Analysis
+    zscore = Column(Float)
+    savings_eur = Column(Float)
+    savings_pct = Column(Float)
+    
+    # Status
+    sent_at = Column(DateTime)
+    dismissed = Column(Boolean, default=False)
+    
+    # Relationship
+    listing = relationship("Listing", back_populates="alerts")
+    
+    def __repr__(self):
+        return f"<Alert({self.alert_type} listing_id={self.listing_id})>"
+
+
+# Database engine and session
+engine = create_engine(DATABASE_URL, echo=False)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def init_db():
+    """Initialize database tables."""
+    Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    """Get database session."""
+    db = SessionLocal()
+    try:
+        return db
+    finally:
+        db.close()

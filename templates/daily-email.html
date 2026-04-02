@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>Sofia RE Daily Digest — {{ date }}</title>
+  <!--[if mso]>
+  <style type="text/css">
+    table { border-collapse: collapse; }
+    td { font-family: Arial, sans-serif; }
+  </style>
+  <![endif]-->
+</head>
+<body style="margin:0;padding:0;background-color:#0a0a0f;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+
+<!-- Dark-mode overrides for clients that support it -->
+<div style="display:none;font-size:1px;color:#0a0a0f;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">
+  {{ preheader_text }}
+</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#0a0a0f;">
+<tr><td align="center" style="padding:24px 12px;">
+
+<!-- Container -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background-color:#111118;border:1px solid #1e1e2e;border-radius:16px;overflow:hidden;">
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- HEADER                                                  -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <tr><td style="padding:32px 28px 20px;border-bottom:1px solid #1e1e2e;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td>
+          <span style="font-size:28px;line-height:1;">🏠</span>
+          <span style="font-size:20px;font-weight:700;color:#ffffff;vertical-align:middle;padding-left:8px;">Sofia Real Estate Intelligence</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding-top:4px;">
+          <span style="font-size:13px;color:#64748b;">Daily Digest &mdash; {{ date }}</span>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SUMMARY STATS                                           -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <tr><td style="padding:24px 28px 16px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <!-- Total Active -->
+        <td width="33%" style="padding:0 4px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;">
+            <tr><td style="padding:14px 12px;text-align:center;">
+              <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Total Active</div>
+              <div style="font-size:24px;font-weight:700;color:#818cf8;padding-top:4px;">{{ total_active }}</div>
+            </td></tr>
+          </table>
+        </td>
+        <!-- New Today -->
+        <td width="33%" style="padding:0 4px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;">
+            <tr><td style="padding:14px 12px;text-align:center;">
+              <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">New Today</div>
+              <div style="font-size:24px;font-weight:700;color:#22c55e;padding-top:4px;">{{ new_today }}</div>
+            </td></tr>
+          </table>
+        </td>
+        <!-- Price Drops -->
+        <td width="33%" style="padding:0 4px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;">
+            <tr><td style="padding:14px 12px;text-align:center;">
+              <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Price Drops</div>
+              <div style="font-size:24px;font-weight:700;color:#ef4444;padding-top:4px;">{{ price_drops_count }}</div>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- NEW DEALS (Z-score < -1.5)                             -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  {% if new_deals %}
+  <tr><td style="padding:20px 28px 8px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr><td>
+        <span style="font-size:16px;font-weight:700;color:#22c55e;">🔥 New Deals</span>
+        <span style="font-size:12px;color:#64748b;padding-left:8px;">(Z-score &lt; -1.5)</span>
+      </td></tr>
+    </table>
+  </td></tr>
+
+  {% for deal in new_deals %}
+  <tr><td style="padding:8px 28px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;">
+      <tr><td style="padding:16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td>
+              <div style="font-size:15px;font-weight:600;color:#ffffff;">📍 {{ deal.neighborhood }}</div>
+              <div style="font-size:13px;color:#94a3b8;padding-top:2px;">
+                {{ deal.rooms_text }}, {{ deal.area_sqm }}m²
+                {% if deal.construction_type %} · {{ deal.construction_type }}{% endif %}
+                {% if deal.floor %} · Floor {{ deal.floor }}/{{ deal.total_floors }}{% endif %}
+              </div>
+            </td>
+            <td align="right" style="vertical-align:top;">
+              <span style="display:inline-block;background-color:#16a34a22;color:#22c55e;font-size:12px;font-weight:600;padding:4px 10px;border-radius:20px;border:1px solid #22c55e33;">
+                Z: {{ deal.zscore }}
+              </span>
+            </td>
+          </tr>
+          <tr><td colspan="2" style="padding-top:10px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td width="50%">
+                  <div style="font-size:11px;color:#64748b;">Price</div>
+                  <div style="font-size:16px;font-weight:700;color:#ffffff;">€{{ deal.price_eur }}</div>
+                  <div style="font-size:12px;color:#94a3b8;">€{{ deal.price_per_sqm }}/m²</div>
+                </td>
+                <td width="50%">
+                  <div style="font-size:11px;color:#64748b;">vs. Market Avg</div>
+                  <div style="font-size:16px;font-weight:700;color:#22c55e;">-{{ deal.savings_pct }}%</div>
+                  <div style="font-size:12px;color:#94a3b8;">Save €{{ deal.savings_eur }}</div>
+                </td>
+              </tr>
+            </table>
+          </td></tr>
+          <tr><td colspan="2" style="padding-top:12px;">
+            <a href="{{ deal.url }}" style="display:inline-block;background-color:#4f46e5;color:#ffffff;font-size:13px;font-weight:600;padding:8px 20px;border-radius:8px;text-decoration:none;">View Listing →</a>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </td></tr>
+  {% endfor %}
+  {% else %}
+  <tr><td style="padding:20px 28px;">
+    <div style="background-color:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;padding:20px;text-align:center;">
+      <div style="font-size:14px;color:#64748b;">No new deals detected today. Market is quiet. 🤫</div>
+    </div>
+  </td></tr>
+  {% endif %}
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- PRICE DROPS (5%+)                                       -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  {% if price_drops %}
+  <tr><td style="padding:24px 28px 8px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr><td>
+        <span style="font-size:16px;font-weight:700;color:#ef4444;">📉 Price Drops</span>
+        <span style="font-size:12px;color:#64748b;padding-left:8px;">(5%+ on tracked listings)</span>
+      </td></tr>
+    </table>
+  </td></tr>
+
+  {% for drop in price_drops %}
+  <tr><td style="padding:8px 28px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;">
+      <tr><td style="padding:14px 16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td>
+              <div style="font-size:14px;font-weight:600;color:#ffffff;">📍 {{ drop.neighborhood }}</div>
+              <div style="font-size:12px;color:#94a3b8;">{{ drop.rooms_text }}, {{ drop.area_sqm }}m²</div>
+            </td>
+            <td align="right">
+              <div style="font-size:12px;color:#94a3b8;text-decoration:line-through;">€{{ drop.old_price }}</div>
+              <div style="font-size:15px;font-weight:700;color:#ef4444;">€{{ drop.new_price }}</div>
+            </td>
+            <td align="right" width="80" style="padding-left:12px;">
+              <span style="display:inline-block;background-color:#ef444422;color:#ef4444;font-size:13px;font-weight:700;padding:4px 10px;border-radius:20px;border:1px solid #ef444433;">
+                -{{ drop.drop_pct }}%
+              </span>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </td></tr>
+  {% endfor %}
+  {% endif %}
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- HOT DISTRICTS (velocity)                                -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  {% if hot_districts %}
+  <tr><td style="padding:24px 28px 8px;">
+    <span style="font-size:16px;font-weight:700;color:#f97316;">🏘️ Hot Districts</span>
+    <span style="font-size:12px;color:#64748b;padding-left:8px;">(velocity: added vs. sold)</span>
+  </td></tr>
+
+  <tr><td style="padding:8px 28px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;overflow:hidden;">
+      <!-- Table Header -->
+      <tr style="background-color:#16162a;">
+        <td style="padding:10px 14px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">District</td>
+        <td align="center" style="padding:10px 8px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Added</td>
+        <td align="center" style="padding:10px 8px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Sold</td>
+        <td align="center" style="padding:10px 8px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Avg €/m²</td>
+        <td align="center" style="padding:10px 14px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Velocity</td>
+      </tr>
+      {% for district in hot_districts %}
+      <tr style="border-top:1px solid #2a2a3e;">
+        <td style="padding:10px 14px;font-size:13px;color:#ffffff;font-weight:500;">{{ district.name }}</td>
+        <td align="center" style="padding:10px 8px;font-size:13px;color:#22c55e;">+{{ district.added }}</td>
+        <td align="center" style="padding:10px 8px;font-size:13px;color:#ef4444;">-{{ district.sold }}</td>
+        <td align="center" style="padding:10px 8px;font-size:13px;color:#94a3b8;">€{{ district.avg_price }}</td>
+        <td align="center" style="padding:10px 14px;">
+          <span style="display:inline-block;background-color:{% if district.velocity_score > 0 %}#f9731622{% else %}#22c55e22{% endif %};color:{% if district.velocity_score > 0 %}#f97316{% else %}#22c55e{% endif %};font-size:12px;font-weight:600;padding:3px 8px;border-radius:12px;">
+            {{ district.velocity_label }}
+          </span>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </td></tr>
+  {% endif %}
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- TOP PICK                                                -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  {% if top_pick %}
+  <tr><td style="padding:24px 28px 8px;">
+    <span style="font-size:16px;font-weight:700;color:#fbbf24;">⭐ Top Pick of the Day</span>
+  </td></tr>
+
+  <tr><td style="padding:8px 28px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:linear-gradient(135deg,#1e1b4b 0%,#1a1a2e 100%);border:1px solid #4f46e5;border-radius:12px;">
+      <tr><td style="padding:20px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr><td>
+            <div style="font-size:18px;font-weight:700;color:#ffffff;">📍 {{ top_pick.neighborhood }}</div>
+            <div style="font-size:13px;color:#94a3b8;padding-top:4px;">
+              {{ top_pick.rooms_text }}, {{ top_pick.area_sqm }}m²
+              {% if top_pick.construction_type %} · {{ top_pick.construction_type }}{% endif %}
+            </div>
+          </td></tr>
+          <tr><td style="padding-top:14px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td width="33%">
+                  <div style="font-size:11px;color:#64748b;">Price</div>
+                  <div style="font-size:18px;font-weight:700;color:#ffffff;">€{{ top_pick.price_eur }}</div>
+                </td>
+                <td width="33%">
+                  <div style="font-size:11px;color:#64748b;">€/m²</div>
+                  <div style="font-size:18px;font-weight:700;color:#818cf8;">€{{ top_pick.price_per_sqm }}</div>
+                </td>
+                <td width="33%">
+                  <div style="font-size:11px;color:#64748b;">Savings</div>
+                  <div style="font-size:18px;font-weight:700;color:#22c55e;">{{ top_pick.savings_pct }}%</div>
+                </td>
+              </tr>
+            </table>
+          </td></tr>
+          <tr><td style="padding-top:14px;">
+            <div style="background-color:#ffffff0d;border-radius:8px;padding:12px;">
+              <div style="font-size:11px;color:#64748b;padding-bottom:4px;">💡 Why this pick:</div>
+              <div style="font-size:13px;color:#e2e8f0;line-height:1.5;">{{ top_pick.reasoning }}</div>
+            </div>
+          </td></tr>
+          <tr><td style="padding-top:16px;text-align:center;">
+            <a href="{{ top_pick.url }}" style="display:inline-block;background-color:#4f46e5;color:#ffffff;font-size:14px;font-weight:700;padding:12px 32px;border-radius:8px;text-decoration:none;">View Top Pick →</a>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </td></tr>
+  {% endif %}
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- FOOTER                                                  -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <tr><td style="padding:28px 28px 24px;border-top:1px solid #1e1e2e;margin-top:16px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr><td align="center">
+        <a href="{{ dashboard_url }}" style="display:inline-block;background-color:#1a1a2e;color:#818cf8;font-size:13px;font-weight:600;padding:10px 24px;border-radius:8px;text-decoration:none;border:1px solid #2a2a3e;">📊 Open Full Dashboard</a>
+      </td></tr>
+      <tr><td align="center" style="padding-top:16px;">
+        <div style="font-size:11px;color:#475569;line-height:1.6;">
+          Sofia Real Estate Intelligence · Generated {{ generated_at }}<br>
+          <a href="{{ dashboard_url }}" style="color:#64748b;text-decoration:underline;">Dashboard</a> &nbsp;·&nbsp;
+          <a href="{{ unsubscribe_url }}" style="color:#64748b;text-decoration:underline;">Unsubscribe</a>
+        </div>
+      </td></tr>
+    </table>
+  </td></tr>
+
+</table>
+<!-- /Container -->
+
+</td></tr>
+</table>
+
+</body>
+</html>
