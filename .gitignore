@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .env
+.venv/
+data/email_preview.html
+data/latest_digest.json
