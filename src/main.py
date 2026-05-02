@@ -194,13 +194,27 @@ def cmd_alerts():
     messages = []
     sent_count = 0
     
+    hood_repo = NeighborhoodRepository(db)
+
     for alert in unsent:
         if alert.alert_type == 'underpriced' and alert.listing:
             # Check if meets threshold (zscore < -1.5)
             if not should_send_alert(alert.zscore or 0, min_zscore=-1.5):
                 logger.debug(f"Skipping alert for listing {alert.listing.id} (zscore={alert.zscore})")
                 continue
-            
+
+            # 0-baseline edge case: if neighborhood has no avg_price_per_sqm, the
+            # "savings" figure in the alert is meaningless. Skip rather than send
+            # a misleading "0% below avg" message.
+            hood = hood_repo.get_or_create(alert.listing.neighborhood) if alert.listing.neighborhood else None
+            hood_avg = getattr(hood, 'avg_price_per_sqm', None) if hood else None
+            if not hood_avg or hood_avg <= 0:
+                logger.warning(
+                    f"Skipping alert {alert.id} ({alert.listing.neighborhood}): "
+                    f"neighborhood baseline missing or zero — savings would be misleading"
+                )
+                continue
+
             # Convert listing to alert format
             listing_data = {
                 'id': alert.listing.id,
@@ -239,13 +253,19 @@ def cmd_alerts():
                 'zscore': alert.zscore,
             })
     
-    # Send alerts via OpenClaw message tool
+    # Send alerts via Telegram Bot API
     from src.message_sender import send_deal_alerts
-    
+
     if messages:
-        sent_count = send_deal_alerts(messages)
-        logger.info(f"Sent {sent_count} deal alerts via Telegram")
-    
+        sent_ids = send_deal_alerts(messages)
+        sent_count = len(sent_ids)
+        for alert_id in sent_ids:
+            alert_repo.mark_sent(alert_id)
+        logger.info(
+            f"Sent {sent_count}/{len(messages)} deal alerts via Telegram "
+            f"(unsent will be retried next run)"
+        )
+
     return messages
 
 
