@@ -341,25 +341,61 @@ def cmd_dedup_stats():
     return stats
 
 
+def cmd_export_dashboard():
+    """Regenerate dashboard JSON files from DB; auto-commit + push if enabled.
+
+    Writes <DASHBOARD_REPO_PATH>/public/data.json and daily-digest.json. When
+    DASHBOARD_AUTO_PUSH is on (default), commits and pushes those files so
+    Vercel re-deploys automatically.
+    """
+    logger.info("Exporting dashboard data...")
+    db = get_db()
+
+    from src.exporters.dashboard import export_dashboard
+    summary = export_dashboard(db)
+
+    if not summary.get("ok"):
+        logger.error(f"Dashboard export failed: {summary.get('reason')}")
+        return summary
+
+    print("\n" + "=" * 60)
+    print("DASHBOARD EXPORT")
+    print("=" * 60)
+    print(f"Listings written:    {summary['listings']}")
+    print(f"Deals (z ≤ -1.5):    {summary['deals']}")
+    print(f"Neighborhoods:       {summary['neighborhoods']}")
+    print(f"Files:               {', '.join(summary['wrote'])}")
+    print(f"Pushed to GitHub:    {'yes' if summary['pushed'] else 'no'}")
+    print("=" * 60)
+    return summary
+
+
 def cmd_full():
-    """Run full pipeline: scrape + analyze + alerts."""
+    """Run full pipeline: scrape + analyze + alerts + dashboard export."""
     logger.info("Running full pipeline...")
-    
+
     # Step 1: Scrape
     scraped = cmd_scrape()
-    
+
     # Step 2: Analyze
     anomalies = cmd_analyze()
-    
-    # Step 3: Alerts
+
+    # Step 3: Alerts (Telegram)
     messages = cmd_alerts()
-    
-    logger.info(f"Pipeline complete: {scraped} scraped, {anomalies} anomalies, {len(messages)} alerts")
-    
+
+    # Step 4: Refresh dashboard data + auto-deploy via Vercel
+    export_summary = cmd_export_dashboard()
+
+    logger.info(
+        f"Pipeline complete: {scraped} scraped, {anomalies} anomalies, "
+        f"{len(messages)} alerts, dashboard pushed={export_summary.get('pushed', False)}"
+    )
+
     return {
         'scraped': scraped,
         'anomalies': anomalies,
         'alerts': len(messages),
+        'dashboard': export_summary,
     }
 
 
@@ -370,18 +406,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.main scrape       # Run scrapers with deduplication
-  python -m src.main analyze      # Analyze listings
-  python -m src.main alerts       # Generate and send alerts
-  python -m src.main stats        # Show statistics
-  python -m src.main dedup-stats  # Show deduplication stats
-  python -m src.main full         # Run full pipeline
+  python -m src.main scrape            # Run scrapers with deduplication
+  python -m src.main analyze           # Analyze listings
+  python -m src.main alerts            # Generate and send alerts
+  python -m src.main stats             # Show statistics
+  python -m src.main dedup-stats       # Show deduplication stats
+  python -m src.main export-dashboard  # Refresh dashboard JSON + push to GitHub
+  python -m src.main full              # Run full pipeline (scrape→analyze→alerts→export)
         """
     )
-    
+
     parser.add_argument(
         'command',
-        choices=['scrape', 'analyze', 'alerts', 'stats', 'full', 'init', 'dedup-stats'],
+        choices=['scrape', 'analyze', 'alerts', 'stats', 'full', 'init', 'dedup-stats', 'export-dashboard'],
         help='Command to run'
     )
     
@@ -405,6 +442,7 @@ Examples:
         'stats': cmd_stats,
         'full': cmd_full,
         'dedup-stats': cmd_dedup_stats,
+        'export-dashboard': cmd_export_dashboard,
     }
     
     try:

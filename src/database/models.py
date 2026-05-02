@@ -162,8 +162,43 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
-    """Initialize database tables."""
+    """Initialize database tables and apply lightweight in-place migrations.
+
+    create_all() only creates missing TABLES — it does not add columns to
+    existing ones. We apply additive ALTER TABLE migrations here for SQLite
+    to keep the model and DB in sync without requiring a full alembic setup.
+    Each migration is idempotent: it inspects the current schema first.
+    """
+    from sqlalchemy import inspect, text
+
     Base.metadata.create_all(bind=engine)
+
+    # Idempotent column additions for older DBs.
+    additive_migrations = {
+        "neighborhoods": [
+            ("unique_listing_count", "INTEGER DEFAULT 0"),
+        ],
+        "listings": [
+            ("canonical_id", "VARCHAR(16)"),
+            ("is_duplicate", "BOOLEAN DEFAULT 0"),
+            ("duplicate_of", "VARCHAR(100)"),
+            ("first_price_eur", "FLOAT"),
+            ("price_changes", "INTEGER DEFAULT 0"),
+            ("is_sold", "BOOLEAN DEFAULT 0"),
+            ("sold_date", "DATETIME"),
+            ("days_on_market", "INTEGER"),
+        ],
+    }
+
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, cols in additive_migrations.items():
+            if not inspector.has_table(table):
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            for col_name, col_def in cols:
+                if col_name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"))
 
 
 def get_db():

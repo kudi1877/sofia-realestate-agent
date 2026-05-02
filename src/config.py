@@ -25,9 +25,20 @@ ANOMALY_PCT_THRESHOLD = float(os.getenv("ANOMALY_PCT_THRESHOLD", "0.85"))
 MIN_LISTINGS_PER_GROUP = int(os.getenv("MIN_LISTINGS_PER_GROUP", "5"))
 EUR_BGN_RATE = float(os.getenv("EUR_BGN_RATE", "1.9558"))
 
-# Telegram (optional - can use OpenClaw's native messaging)
+# Telegram delivery
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# Dashboard repo path — where to write public/data.json + public/daily-digest.json
+# during `export-dashboard`. Default assumes both repos sit side-by-side.
+# Override via DASHBOARD_REPO_PATH env if your layout differs (e.g. on CI / other dev machine).
+DASHBOARD_REPO_PATH = Path(
+    os.getenv("DASHBOARD_REPO_PATH", str(BASE_DIR.parent / "sofia-realestate-dashboard"))
+).expanduser().resolve()
+
+# Whether `export-dashboard` should auto git commit + push the regenerated JSON
+# files (so Vercel auto-deploys). Set to "0" / "false" to disable.
+DASHBOARD_AUTO_PUSH = os.getenv("DASHBOARD_AUTO_PUSH", "1").lower() not in ("0", "false", "no", "")
 
 # User agents for rotation
 USER_AGENTS = [
