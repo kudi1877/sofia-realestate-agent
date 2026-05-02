@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.sofiare.daily-pipeline.plist
+  ─────────────────────────────────
+  launchd schedule for the Sofia Real Estate agent. Runs the full pipeline
+  (scrape → analyze → alerts → export-dashboard → push to Vercel) once per
+  day at 06:00 local time.
+
+  INSTALL (one-time, per machine):
+    cp scripts/com.sofiare.daily-pipeline.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.sofiare.daily-pipeline.plist
+
+  RELOAD after editing:
+    launchctl unload ~/Library/LaunchAgents/com.sofiare.daily-pipeline.plist
+    cp scripts/com.sofiare.daily-pipeline.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.sofiare.daily-pipeline.plist
+
+  TRIGGER MANUALLY (for testing):
+    launchctl start com.sofiare.daily-pipeline
+
+  CHECK STATUS:
+    launchctl list | grep sofiare
+
+  UNINSTALL:
+    launchctl unload ~/Library/LaunchAgents/com.sofiare.daily-pipeline.plist
+    rm ~/Library/LaunchAgents/com.sofiare.daily-pipeline.plist
+
+  LOGS:
+    Pipeline output: data/logs/cron-YYYY-MM-DD.log
+    launchd stderr:  data/logs/launchd-stderr.log
+    launchd stdout:  data/logs/launchd-stdout.log
+
+  Notes on pathing: launchd runs jobs with a near-empty environment. The
+  wrapper script (run-full-pipeline.sh) sources ~/.zshrc to pick up the
+  TELEGRAM_BOT_TOKEN export. If you change the repo location, update both
+  the ProgramArguments path and the WorkingDirectory below.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sofiare.daily-pipeline</string>
+
+    <!--
+      Two-stage entry to dodge macOS TCC:
+        1. launchd execs /bin/bash with the external wrapper as argv. The
+           external wrapper lives in ~/Library/Application Support/sofiare/
+           (NOT in ~/Downloads), so reading it does NOT require Downloads
+           access. launchd-spawned processes have a different "responsibility"
+           context than Terminal-spawned ones, and TCC denies launchd's bash
+           any access to ~/Downloads even though /bin/bash has Full Disk Access
+           in System Settings.
+        2. The external wrapper exec's the in-repo wrapper. By that point bash
+           is fully running and can read ~/Downloads freely under its FDA.
+
+      Also no WorkingDirectory key — launchd would chdir() before bash starts,
+      and launchd itself has no FDA, so a Downloads chdir would fail.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/kbez/Library/Application Support/sofiare/run-pipeline.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!--
+      Launchd opens these files itself for writing — they CANNOT live inside
+      ~/Downloads (launchd has no Full Disk Access). Use ~/Library/Logs which
+      is outside TCC restrictions. The wrapper script writes its own detailed
+      log to data/logs/cron-YYYY-MM-DD.log inside the project; these two are
+      just for debugging launchd-level failures (before the wrapper starts).
+    -->
+    <key>StandardOutPath</key>
+    <string>/Users/kbez/Library/Logs/sofiare/launchd-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kbez/Library/Logs/sofiare/launchd-stderr.log</string>
+
+    <!--
+      Make /usr/local/bin and homebrew available — needed for git on systems
+      where it's not in /usr/bin (e.g. Apple Silicon brew at /opt/homebrew).
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

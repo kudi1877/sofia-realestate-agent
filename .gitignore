@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 data/email_preview.html
 data/latest_digest.json
+data/logs/
+.DS_Store
