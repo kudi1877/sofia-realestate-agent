@@ -2,7 +2,7 @@
 
 import sys
 import argparse
-from typing import List
+from typing import Any, Dict, List
 
 from loguru import logger
 
@@ -182,40 +182,151 @@ def cmd_analyze():
 
 
 def cmd_alerts():
-    """Generate and send alert text for new anomalies via Telegram."""
-    logger.info("Generating alerts...")
-    
+    """Build a SINGLE Telegram digest message from new alerts.
+
+    Replaces the per-deal blast (which sent ~750 individual messages on first
+    run). Now collects all unsent underpriced alerts, applies aggressive
+    filters (active listings only, apartments only, sane area, neighborhood
+    baseline exists), takes the top 3 by best z-score, and packs them into
+    ONE digest with a link to the dashboard for the rest.
+
+    Filters applied (drops alerts that are noise):
+      - listing must be `is_active`
+      - listing.property_type == 'apartment' (skips parcels/commercial that
+        polluted the original deal list with bogus €/m² figures)
+      - 30 ≤ area_sqm ≤ 500 (typical apartment range — excludes 4000m² plots
+        misclassified as apartments)
+      - neighborhood has a non-zero avg_price_per_sqm baseline
+      - z-score ≤ -1.5
+
+    All alerts considered (whether they made the top 3 or not) are marked
+    sent — they've been "processed" for this run. New deals from the next
+    scrape produce new alerts.
+    """
+    from src.alerts.telegram import format_telegram_digest
+    from src.message_sender import send_simple_message
+
+    logger.info("Building digest from new alerts...")
+
     db = get_db()
     alert_repo = AlertRepository(db)
-    
-    unsent = alert_repo.get_unsent()
-    logger.info(f"Found {len(unsent)} unsent alerts")
-    
-    messages = []
-    sent_count = 0
-    
     hood_repo = NeighborhoodRepository(db)
 
+    unsent = alert_repo.get_unsent()
+    logger.info(f"Found {len(unsent)} unsent alerts to consider")
+
+    # Filter to genuine, sendable underpriced deals.
+    qualified: List = []  # list of (alert, hood_avg) tuples
+    for alert in unsent:
+        if alert.alert_type != 'underpriced' or not alert.listing:
+            continue
+        listing = alert.listing
+        # Active only — no dead 403 listings (this was happening before).
+        if not getattr(listing, 'is_active', False):
+            continue
+        # Apartments only — parcels/commercial pollute €/m² stats.
+        if (listing.property_type or '').lower() != 'apartment':
+            continue
+        # Sane area. Excludes 4000m² "apartments" that are actually plots.
+        area = listing.area_sqm or 0
+        if area < 30 or area > 500:
+            continue
+        # Z-score threshold.
+        if not should_send_alert(alert.zscore or 0, min_zscore=-1.5):
+            continue
+        # Neighborhood baseline must exist.
+        hood = hood_repo.get_or_create(listing.neighborhood) if listing.neighborhood else None
+        hood_avg = getattr(hood, 'avg_price_per_sqm', None) if hood else None
+        if not hood_avg or hood_avg <= 0:
+            continue
+        qualified.append((alert, hood_avg))
+
+    logger.info(f"Qualified after filters: {len(qualified)} of {len(unsent)}")
+
+    # Top 3 by lowest (most negative) z-score = best deals.
+    qualified.sort(key=lambda x: x[0].zscore or 0)
+    top = qualified[:3]
+
+    top_deals_payload = [
+        {
+            'neighborhood': a.listing.neighborhood,
+            'price_eur': float(a.listing.price_eur),
+            'area_sqm': float(a.listing.area_sqm),
+            'rooms': a.listing.rooms,
+            'price_per_sqm_eur': float(a.listing.price_per_sqm_eur),
+            'zscore': float(a.zscore or 0),
+            'savings_pct': float(a.savings_pct or 0),
+            'url': a.listing.url,
+        }
+        for a, _ in top
+    ]
+
+    # Hottest neighborhoods — count qualified deals per neighborhood, top 3.
+    hood_counts: Dict[str, Dict[str, Any]] = {}
+    for a, hood_avg in qualified:
+        name = a.listing.neighborhood or 'Unknown'
+        bucket = hood_counts.setdefault(name, {'count': 0, 'avg': hood_avg})
+        bucket['count'] += 1
+    by_neighborhood_payload = [
+        {'neighborhood': name, 'deal_count': v['count'], 'avg_price_per_sqm': v['avg']}
+        for name, v in sorted(hood_counts.items(), key=lambda x: -x[1]['count'])[:3]
+    ]
+
+    # Aggregate stats.
+    listing_repo = ListingRepository(db)
+    total_active = sum(
+        1 for l in listing_repo.get_active()
+        if not getattr(l, 'is_duplicate', False)
+    )
+
+    # Build + send the single digest.
+    if not qualified:
+        logger.info("No qualified deals — skipping Telegram digest entirely")
+        # Still mark all considered alerts as sent so they don't re-queue.
+        for alert in unsent:
+            alert_repo.mark_sent(alert.id)
+        return {'sent': 0, 'qualified': 0, 'considered': len(unsent)}
+
+    digest_text = format_telegram_digest(
+        top_deals=top_deals_payload,
+        total_new_deals=len(qualified),
+        total_active_listings=total_active,
+        by_neighborhood=by_neighborhood_payload,
+    )
+
+    ok = send_simple_message(digest_text)
+    if ok:
+        # Mark every considered alert sent — top 3 + the rest are now "processed".
+        for alert in unsent:
+            alert_repo.mark_sent(alert.id)
+        logger.info(
+            f"Sent digest with top {len(top)} of {len(qualified)} qualified deals; "
+            f"marked {len(unsent)} alerts as sent"
+        )
+        return {'sent': 1, 'qualified': len(qualified), 'considered': len(unsent)}
+    else:
+        logger.error("Digest send failed; alerts left unsent for retry next run")
+        return {'sent': 0, 'qualified': len(qualified), 'considered': len(unsent)}
+
+
+def _legacy_per_deal_alerts_DISABLED():
+    """Old per-deal alert blaster. Kept here as a reference for what NOT to
+    do — sending one Telegram message per anomaly produced 750+ messages on
+    the first DB seed. The active path is `cmd_alerts` above.
+    """
+    db = get_db()
+    alert_repo = AlertRepository(db)
+    unsent = alert_repo.get_unsent()
+    messages = []
+    hood_repo = NeighborhoodRepository(db)
     for alert in unsent:
         if alert.alert_type == 'underpriced' and alert.listing:
-            # Check if meets threshold (zscore < -1.5)
             if not should_send_alert(alert.zscore or 0, min_zscore=-1.5):
-                logger.debug(f"Skipping alert for listing {alert.listing.id} (zscore={alert.zscore})")
                 continue
-
-            # 0-baseline edge case: if neighborhood has no avg_price_per_sqm, the
-            # "savings" figure in the alert is meaningless. Skip rather than send
-            # a misleading "0% below avg" message.
             hood = hood_repo.get_or_create(alert.listing.neighborhood) if alert.listing.neighborhood else None
             hood_avg = getattr(hood, 'avg_price_per_sqm', None) if hood else None
             if not hood_avg or hood_avg <= 0:
-                logger.warning(
-                    f"Skipping alert {alert.id} ({alert.listing.neighborhood}): "
-                    f"neighborhood baseline missing or zero — savings would be misleading"
-                )
                 continue
-
-            # Convert listing to alert format
             listing_data = {
                 'id': alert.listing.id,
                 'neighborhood': alert.listing.neighborhood,
@@ -227,17 +338,13 @@ def cmd_alerts():
                 'url': alert.listing.url,
                 'source': alert.listing.source,
             }
-            
             deal_alert = listing_to_alert(
                 listing_data,
                 zscore=alert.zscore or 0,
                 savings_pct=alert.savings_pct or 0,
                 savings_eur=alert.savings_eur or 0,
             )
-            
-            # Format message
             message = format_deal_alert(deal_alert)
-            
             messages.append({
                 'alert_id': alert.id,
                 'message': message,
@@ -252,20 +359,11 @@ def cmd_alerts():
                 'listing': alert.listing,
                 'zscore': alert.zscore,
             })
-    
-    # Send alerts via Telegram Bot API
     from src.message_sender import send_deal_alerts
-
     if messages:
         sent_ids = send_deal_alerts(messages)
-        sent_count = len(sent_ids)
         for alert_id in sent_ids:
             alert_repo.mark_sent(alert_id)
-        logger.info(
-            f"Sent {sent_count}/{len(messages)} deal alerts via Telegram "
-            f"(unsent will be retried next run)"
-        )
-
     return messages
 
 
@@ -380,21 +478,23 @@ def cmd_full():
     # Step 2: Analyze
     anomalies = cmd_analyze()
 
-    # Step 3: Alerts (Telegram)
-    messages = cmd_alerts()
+    # Step 3: Alerts (Telegram digest — single message per run)
+    alerts_summary = cmd_alerts() or {}
 
     # Step 4: Refresh dashboard data + auto-deploy via Vercel
     export_summary = cmd_export_dashboard()
 
     logger.info(
         f"Pipeline complete: {scraped} scraped, {anomalies} anomalies, "
-        f"{len(messages)} alerts, dashboard pushed={export_summary.get('pushed', False)}"
+        f"digest_sent={alerts_summary.get('sent', 0)}, "
+        f"qualified_deals={alerts_summary.get('qualified', 0)}, "
+        f"dashboard_pushed={export_summary.get('pushed', False)}"
     )
 
     return {
         'scraped': scraped,
         'anomalies': anomalies,
-        'alerts': len(messages),
+        'alerts': alerts_summary,
         'dashboard': export_summary,
     }
 
@@ -455,12 +555,27 @@ Examples:
             # Already printed
             pass
         elif args.command == 'alerts':
-            print(f"\nGenerated {len(result)} alerts")
+            # cmd_alerts now returns a digest summary dict
+            r = result if isinstance(result, dict) else {}
+            sent = r.get('sent', 0)
+            qualified = r.get('qualified', 0)
+            considered = r.get('considered', 0)
+            print(
+                f"\nDigest: {sent} message(s) sent · "
+                f"{qualified} qualified deal(s) · {considered} alerts considered"
+            )
         elif args.command == 'full':
             print(f"\nPipeline complete:")
             print(f"  Scraped: {result['scraped']} listings")
             print(f"  Anomalies: {result['anomalies']}")
-            print(f"  Alerts: {result['alerts']}")
+            alerts_summary = result.get('alerts')
+            if isinstance(alerts_summary, dict):
+                print(
+                    f"  Alerts: {alerts_summary.get('sent', 0)} digest sent · "
+                    f"{alerts_summary.get('qualified', 0)} qualified"
+                )
+            else:
+                print(f"  Alerts: {alerts_summary}")
         else:
             print(f"\nCommand '{args.command}' completed successfully")
             

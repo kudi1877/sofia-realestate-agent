@@ -83,6 +83,9 @@ def format_deal_alert(alert: DealAlert) -> str:
     return message
 
 
+DASHBOARD_URL = "https://sofia-realestate-dashboard.vercel.app"
+
+
 def format_daily_digest(
     new_listings: int,
     price_drops: int,
@@ -90,15 +93,9 @@ def format_daily_digest(
     avg_price_change: float,
     hot_deals: List[Dict[str, Any]]
 ) -> str:
-    """Format a daily digest message.
-    
-    Args:
-        new_listings: Number of new listings today
-        price_drops: Number of listings with price drops
-        underpriced: Number of underpriced listings detected
-        avg_price_change: Average price change percentage
-        hot_deals: List of top deals to highlight
-    """
+    """[Legacy] Brief digest format used by daily-email pipeline. Kept for the
+    Vercel dashboard's daily-digest.json consumer. The Telegram cron uses
+    `format_telegram_digest` instead."""
     deals_section = ""
     if hot_deals:
         deals_section = "\n🔥 <b>Top Deals Today:</b>\n"
@@ -108,7 +105,7 @@ def format_daily_digest(
                 f"{deal['price_eur']:,.0f}€ "
                 f"({deal['savings_pct']:.0f}% below avg)\n"
             )
-    
+
     message = f"""📊 <b>Sofia Real Estate Daily Digest</b>
 
 📈 <b>Market Activity:</b>
@@ -120,7 +117,87 @@ def format_daily_digest(
    • Avg change: {avg_price_change:+.1f}%{deals_section}
 
 <i>Next update tomorrow at 09:00</i>"""
-    
+
+    return message
+
+
+def format_telegram_digest(
+    top_deals: List[Dict[str, Any]],
+    total_new_deals: int,
+    total_active_listings: int,
+    by_neighborhood: List[Dict[str, Any]],
+    dashboard_url: str = DASHBOARD_URL,
+) -> str:
+    """Build a SINGLE Telegram digest message for one cron run.
+
+    Replaces the old per-deal alert spam. The message has:
+      - Header
+      - Top 3 deals with direct listing URLs
+      - Aggregate stats (new deals total, active listings)
+      - Top 3 hottest neighborhoods
+      - Footer with dashboard URL for the long tail
+
+    Args:
+        top_deals: Top 3 sorted by best (lowest) z-score. Each is a dict with
+            keys: neighborhood, price_eur, area_sqm, rooms, price_per_sqm_eur,
+                  zscore, savings_pct, url.
+        total_new_deals: How many deals total (incl. ones not in top 3).
+        total_active_listings: Active listings tracked.
+        by_neighborhood: Top 3 hottest neighborhoods, each:
+            {neighborhood, deal_count, avg_price_per_sqm}
+        dashboard_url: Link to the Vercel dashboard.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # Top deals block
+    if top_deals:
+        deals_lines = [f"\n🔥 <b>Top {len(top_deals)} deals</b>"]
+        for i, d in enumerate(top_deals, 1):
+            rooms_part = f"{int(d['rooms'])}-room, " if d.get("rooms") else ""
+            deals_lines.append(
+                f"\n<b>{i}. {d['neighborhood']}</b> — "
+                f"{d['price_eur']:,.0f}€ "
+                f"<i>({d['savings_pct']:.0f}% below avg)</i>"
+            )
+            deals_lines.append(
+                f"   📐 {rooms_part}{d['area_sqm']:.0f}m² · "
+                f"{d['price_per_sqm_eur']:,.0f}€/m² · "
+                f"Z-score {d['zscore']:.2f}"
+            )
+            deals_lines.append(f'   🔗 <a href="{d["url"]}">View listing</a>')
+        deals_block = "\n".join(deals_lines)
+    else:
+        deals_block = "\n<i>No new deals matching the criteria today.</i>"
+
+    # Hottest neighborhoods block
+    if by_neighborhood:
+        hood_lines = ["\n📍 <b>Hottest neighborhoods</b>"]
+        for h in by_neighborhood:
+            hood_lines.append(
+                f"   • {h['neighborhood']}: {h['deal_count']} deals · "
+                f"avg {h['avg_price_per_sqm']:,.0f}€/m²"
+            )
+        hood_block = "\n".join(hood_lines)
+    else:
+        hood_block = ""
+
+    other_count = max(0, total_new_deals - len(top_deals))
+    long_tail = (
+        f'\n\n+ {other_count} more on '
+        f'<a href="{dashboard_url}">the dashboard</a>'
+        if other_count > 0
+        else f'\n\n<a href="{dashboard_url}">Open dashboard</a>'
+    )
+
+    message = (
+        f"📊 <b>Sofia RE digest — {today}</b>\n"
+        f"\n📈 <b>Today's snapshot</b>"
+        f"\n   • Active listings tracked: {total_active_listings:,}"
+        f"\n   • New deals (Z ≤ -1.5): {total_new_deals}"
+        f"{deals_block}"
+        f"{hood_block}"
+        f"{long_tail}"
+    )
     return message
 
 
