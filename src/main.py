@@ -257,6 +257,8 @@ def cmd_alerts():
             'zscore': float(a.zscore or 0),
             'savings_pct': float(a.savings_pct or 0),
             'url': a.listing.url,
+            # When we first saw the listing → digest renders this as "Added Xd ago"
+            'first_seen': a.listing.first_seen,
         }
         for a, _ in top
     ]

@@ -86,6 +86,43 @@ def format_deal_alert(alert: DealAlert) -> str:
 DASHBOARD_URL = "https://sofia-realestate-dashboard.vercel.app"
 
 
+def _format_added(first_seen: Any) -> str:
+    """Render an "Added" timestamp as 'YYYY-MM-DD (Nd ago)' for digest entries.
+
+    Accepts a datetime, ISO string, or None. Returns 'unknown' if it can't parse.
+    """
+    if not first_seen:
+        return "unknown"
+    if isinstance(first_seen, str):
+        try:
+            dt = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
+        except ValueError:
+            return "unknown"
+    elif isinstance(first_seen, datetime):
+        dt = first_seen
+    else:
+        return "unknown"
+    # Strip tzinfo for the diff so we don't compare aware to naive.
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    delta = datetime.utcnow() - dt
+    days = delta.days
+    if days < 0:
+        rel = "in the future"
+    elif days == 0:
+        hours = max(1, int(delta.total_seconds() // 3600))
+        rel = "today" if hours < 1 else f"{hours}h ago"
+    elif days == 1:
+        rel = "yesterday"
+    elif days < 7:
+        rel = f"{days}d ago"
+    elif days < 30:
+        rel = f"{days // 7}w ago"
+    else:
+        rel = f"{days // 30}mo ago"
+    return f"{dt.strftime('%Y-%m-%d')} ({rel})"
+
+
 def format_daily_digest(
     new_listings: int,
     price_drops: int,
@@ -154,6 +191,7 @@ def format_telegram_digest(
         deals_lines = [f"\n🔥 <b>Top {len(top_deals)} deals</b>"]
         for i, d in enumerate(top_deals, 1):
             rooms_part = f"{int(d['rooms'])}-room, " if d.get("rooms") else ""
+            added_part = _format_added(d.get("first_seen"))
             deals_lines.append(
                 f"\n<b>{i}. {d['neighborhood']}</b> — "
                 f"{d['price_eur']:,.0f}€ "
@@ -164,6 +202,7 @@ def format_telegram_digest(
                 f"{d['price_per_sqm_eur']:,.0f}€/m² · "
                 f"Z-score {d['zscore']:.2f}"
             )
+            deals_lines.append(f"   🕒 Added {added_part}")
             deals_lines.append(f'   🔗 <a href="{d["url"]}">View listing</a>')
         deals_block = "\n".join(deals_lines)
     else:

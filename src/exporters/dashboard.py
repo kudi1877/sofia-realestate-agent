@@ -70,6 +70,11 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                 # uses the latest underpriced alert per listing.
                 "zscore": _latest_zscore_for_listing(l),
                 "savings_pct": _latest_savings_pct_for_listing(l),
+                # When we first scraped this ad → effectively the "added on" date
+                # for the user. last_seen tells you it's still being re-scraped
+                # (i.e. still active on the source site as of that timestamp).
+                "first_seen": l.first_seen.isoformat() if l.first_seen else None,
+                "last_seen": l.last_seen.isoformat() if l.last_seen else None,
             }
         )
 
