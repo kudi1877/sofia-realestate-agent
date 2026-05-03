@@ -1,0 +1,299 @@
+"""Observability: track pipeline runs + push status to the dashboard.
+
+Two artifacts are written into the dashboard repo's public/ dir:
+
+  status.json — short, frequently-overwritten file with the agent's current
+                state. Polled by the dashboard's StatusBadge every 20s.
+                Pushed at pipeline start (state="running") and at the end
+                (state="idle" or "error", with last-run summary). NOT pushed
+                per source — that would create too many Vercel rebuilds.
+
+  runs.json   — append-only history (capped to N most recent entries) of
+                completed pipeline runs. Each entry holds the per-source
+                breakdown, timing, anomaly count, digest summary, and any
+                errors. Powers the /runs page.
+
+A separate `RunRecorder` class is used by cmd_full / cmd_scrape to collect
+data during a run; .finalize() spits out the dict that ends up in runs.json.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+from dataclasses import dataclass, field, asdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from loguru import logger
+
+from src.config import DASHBOARD_REPO_PATH, DASHBOARD_AUTO_PUSH
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+# Keep the most recent N run records in runs.json. ~1KB each → 30 KB at 30 days.
+MAX_RUN_HISTORY = 30
+
+
+# ── RunRecorder ───────────────────────────────────────────────────────────────
+
+
+@dataclass
+class SourceResult:
+    """Per-source scrape outcome."""
+    name: str
+    scraped: int = 0
+    duration_sec: float = 0.0
+    status: str = "ok"  # ok | error | empty | partial
+    error: Optional[str] = None
+
+
+@dataclass
+class RunRecorder:
+    """Collects timing + outcomes from one pipeline run.
+
+    Used like:
+        rec = RunRecorder()
+        rec.start()
+        with rec.step("scrape"):
+            ...
+            rec.add_source(SourceResult(name="imot.bg", scraped=2260, ...))
+        with rec.step("analyze"):
+            ...
+        rec.set_analysis(anomalies=343, neighborhoods=130)
+        rec.set_digest(sent=1, qualified=18, top_deals=[...])
+        rec.finalize(active_after=6678)
+        # → rec.to_dict() ready to write into runs.json
+    """
+    id: str = field(default_factory=lambda: f"run_{datetime.utcnow().strftime('%Y-%m-%dT%H%M%SZ')}")
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    duration_sec: float = 0.0
+
+    sources: List[SourceResult] = field(default_factory=list)
+    totals: Dict[str, int] = field(default_factory=dict)
+    analysis: Dict[str, Any] = field(default_factory=dict)
+    digest: Dict[str, Any] = field(default_factory=dict)
+    errors: List[str] = field(default_factory=list)
+
+    status: str = "running"  # running | ok | partial | error
+
+    _start_ts: float = field(default=0.0, repr=False)
+    _step_start: Dict[str, float] = field(default_factory=dict, repr=False)
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        self._start_ts = time.time()
+        self.started_at = _utc_now_iso()
+
+    def step(self, name: str) -> "_StepCtx":
+        return _StepCtx(self, name)
+
+    def add_source(self, result: SourceResult) -> None:
+        self.sources.append(result)
+
+    def set_analysis(self, *, anomalies: int, neighborhoods: int, groups_used: int = 0) -> None:
+        self.analysis = {
+            "anomalies": anomalies,
+            "neighborhoods_with_stats": neighborhoods,
+            "groups_used": groups_used,
+        }
+
+    def set_digest(
+        self,
+        *,
+        sent: int,
+        qualified: int,
+        considered: int = 0,
+        top_deals: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        self.digest = {
+            "sent": sent,
+            "qualified": qualified,
+            "considered": considered,
+            "top_deals": top_deals or [],
+        }
+
+    def add_error(self, msg: str) -> None:
+        self.errors.append(msg)
+        if self.status not in ("error",):
+            self.status = "partial"
+
+    def finalize(self, *, active_after: int, scraped_total: Optional[int] = None) -> None:
+        self.finished_at = _utc_now_iso()
+        self.duration_sec = round(time.time() - self._start_ts, 1)
+        self.totals = {
+            "scraped_total": scraped_total
+            if scraped_total is not None
+            else sum(s.scraped for s in self.sources),
+            "active_after": active_after,
+        }
+        # Decide overall status
+        if self.errors and not self.sources:
+            self.status = "error"
+        elif self.status == "running":
+            # No explicit failure → ok unless any source failed hard
+            failed = [s for s in self.sources if s.status == "error"]
+            self.status = "partial" if failed else "ok"
+
+    # ── serialization ─────────────────────────────────────────────────────────
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = {
+            "id": self.id,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "duration_sec": self.duration_sec,
+            "status": self.status,
+            "sources": [asdict(s) for s in self.sources],
+            "totals": self.totals,
+            "analysis": self.analysis,
+            "digest": self.digest,
+            "errors": self.errors,
+        }
+        return d
+
+
+class _StepCtx:
+    """Context manager that records duration of one named pipeline step."""
+    def __init__(self, recorder: RunRecorder, name: str):
+        self.recorder = recorder
+        self.name = name
+        self._start: float = 0.0
+
+    def __enter__(self):
+        self._start = time.time()
+        self.recorder._step_start[self.name] = self._start
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        # Don't swallow exceptions — let them bubble up. We just record duration.
+        # If exception happened, the recorder caller can call add_error() too.
+        return False
+
+
+def _utc_now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+# ── File writers (status.json, runs.json) + git push ──────────────────────────
+
+
+def write_status(
+    state: str,
+    *,
+    summary: Optional[Dict[str, Any]] = None,
+    push: Optional[bool] = None,
+) -> bool:
+    """Write public/status.json in the dashboard repo. Optionally git-push.
+
+    `state` is "running" | "idle" | "error". `summary` is optional last-run
+    data (counts, duration, etc.) — typically only set when state="idle".
+
+    Returns True if the file was written (and pushed if push=True).
+    """
+    if push is None:
+        push = DASHBOARD_AUTO_PUSH
+
+    public = DASHBOARD_REPO_PATH / "public"
+    if not public.exists():
+        logger.warning(f"Dashboard public/ not found at {public}; skipping status update")
+        return False
+
+    payload = {
+        "state": state,
+        "updated_at": _utc_now_iso(),
+        "summary": summary or {},
+    }
+
+    target = public / "status.json"
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if push:
+        return _commit_and_push(
+            DASHBOARD_REPO_PATH,
+            files=["public/status.json"],
+            message=f"status: {state} ({_utc_now_iso()})",
+        )
+    return True
+
+
+def append_run(record: Dict[str, Any], *, push: Optional[bool] = None) -> bool:
+    """Append a finalized run record to public/runs.json (capped to N entries).
+
+    Pushed alongside data.json + status.json by the export step (caller can
+    chain via push=False here and let export_dashboard's commit grab it).
+    """
+    if push is None:
+        push = DASHBOARD_AUTO_PUSH
+
+    public = DASHBOARD_REPO_PATH / "public"
+    if not public.exists():
+        logger.warning(f"Dashboard public/ not found at {public}; skipping runs append")
+        return False
+
+    runs_file = public / "runs.json"
+
+    history: List[Dict[str, Any]] = []
+    if runs_file.exists():
+        try:
+            history = json.loads(runs_file.read_text(encoding="utf-8")).get("runs", [])
+        except Exception as e:
+            logger.warning(f"Could not parse existing runs.json, starting fresh: {e}")
+            history = []
+
+    # Newest first; cap to MAX_RUN_HISTORY
+    history.insert(0, record)
+    history = history[:MAX_RUN_HISTORY]
+
+    runs_file.write_text(
+        json.dumps({"runs": history, "updated_at": _utc_now_iso()}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    if push:
+        return _commit_and_push(
+            DASHBOARD_REPO_PATH,
+            files=["public/runs.json"],
+            message=f"runs: append {record.get('id', 'unknown')}",
+        )
+    return True
+
+
+# ── Git plumbing ──────────────────────────────────────────────────────────────
+
+
+def _commit_and_push(repo: Path, *, files: List[str], message: str) -> bool:
+    """Stage given files, commit, push. No-op if no diff."""
+    try:
+        # Anything to commit?
+        diff = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", *files],
+            capture_output=True, text=True, check=False,
+        )
+        if not diff.stdout.strip():
+            return True  # nothing to do; treat as success
+
+        subprocess.run(
+            ["git", "-C", str(repo), "add", *files],
+            check=True, capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", message],
+            check=True, capture_output=True, text=True,
+        )
+        push = subprocess.run(
+            ["git", "-C", str(repo), "push", "origin", "main"],
+            capture_output=True, text=True, check=False,
+        )
+        if push.returncode != 0:
+            logger.error(f"Push failed for {files}: {push.stderr.strip()}")
+            return False
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"git op failed: {e.stderr.strip() if e.stderr else e}")
+        return False

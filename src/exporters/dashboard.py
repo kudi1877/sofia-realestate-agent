@@ -37,16 +37,26 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     Schema (must match src/lib/types.ts in the dashboard repo):
       { listings: Listing[], neighborhoods: Neighborhood[], stats: {...}, updatedAt }
     """
-    # Active, non-duplicate listings only — that's what the dashboard should show.
-    active = (
+    # SOFT DEPRECIATION (Phase 2.3A):
+    # Show active listings + recently-inactive ones (last_seen ≤ 30 days).
+    # The frontend renders inactive ones dimmed and hides them by default
+    # behind a "Show inactive" toggle. This way a partial scrape that fails
+    # to confirm some listings doesn't make them vanish from the dashboard.
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(days=30)
+
+    rows = (
         db.query(Listing)
-        .filter(Listing.is_active.is_(True))
         .filter((Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)))
+        .filter(
+            (Listing.is_active.is_(True))
+            | (Listing.last_seen >= cutoff)
+        )
         .all()
     )
 
     listings: List[Dict[str, Any]] = []
-    for l in active:
+    for l in rows:
         listings.append(
             {
                 "id": l.id,
@@ -75,6 +85,10 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                 # (i.e. still active on the source site as of that timestamp).
                 "first_seen": l.first_seen.isoformat() if l.first_seen else None,
                 "last_seen": l.last_seen.isoformat() if l.last_seen else None,
+                # Soft-depreciation flag — true when the listing is still on the
+                # source site (we re-confirmed it in the latest scrape). False
+                # means we haven't seen it for ≥1 scrape but it's within 30d.
+                "is_active": bool(l.is_active),
             }
         )
 

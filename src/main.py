@@ -24,65 +24,62 @@ logger.remove()
 logger.add(sys.stderr, level="INFO", format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
 
 
-def cmd_scrape():
-    """Run all scrapers with deduplication."""
+def cmd_scrape(recorder=None):
+    """Run all scrapers with deduplication.
+
+    Optional `recorder` is a RunRecorder from src.observability — when present,
+    per-source results are appended to it for runs.json. Uses introspectable
+    SCRAPERS list so we don't repeat the try/except pattern five times.
+    """
+    import time as _time
+    from src.observability import SourceResult
+
     logger.info("Starting scraping...")
-    
+
     db = get_db()
     repo = ListingRepository(db)
-    
+
     all_listings = []
     active_source_ids = {}
-    
-    # Scrape imot.bg
-    try:
-        with ImotBgScraper() as scraper:
-            listings = scraper.scrape()
-            logger.info(f"imot.bg: scraped {len(listings)} listings")
+
+    # (display_name, source_key, scraper_factory)
+    # Each factory returns either a context-manager scraper or a plain instance.
+    SCRAPERS = [
+        ("imot.bg",     "imotbg",     lambda: ImotBgScraper()),
+        ("homes.bg",    "homesbg",    lambda: HomesBgScraper()),
+        ("imoti.info",  "imotiinfo",  lambda: ImotiInfoScraper()),
+        ("imoti.net",   "imotinet",   lambda: ImotiNetScraper()),
+        ("property.bg", "propertybg", lambda: PropertyBGScraper()),
+    ]
+
+    for display_name, source_key, factory in SCRAPERS:
+        t0 = _time.time()
+        try:
+            scraper = factory()
+            # Use context manager when supported (httpx-based scrapers)
+            if hasattr(scraper, "__enter__"):
+                with scraper as s:
+                    listings = s.scrape()
+            else:
+                listings = scraper.scrape()
+            logger.info(f"{display_name}: scraped {len(listings)} listings")
             all_listings.extend(listings)
-            active_source_ids['imotbg'] = [l['source_id'] for l in listings]
-    except Exception as e:
-        logger.error(f"Error scraping imot.bg: {e}")
-    
-    # Scrape homes.bg (API-based, no context manager needed)
-    try:
-        scraper = HomesBgScraper()
-        listings = scraper.scrape()
-        logger.info(f"homes.bg: scraped {len(listings)} listings")
-        all_listings.extend(listings)
-        active_source_ids['homesbg'] = [l['source_id'] for l in listings]
-    except Exception as e:
-        logger.error(f"Error scraping homes.bg: {e}")
-    
-    # Scrape imoti.info
-    try:
-        with ImotiInfoScraper() as scraper:
-            listings = scraper.scrape()
-            logger.info(f"imoti.info: scraped {len(listings)} listings")
-            all_listings.extend(listings)
-            active_source_ids['imotiinfo'] = [l['source_id'] for l in listings]
-    except Exception as e:
-        logger.error(f"Error scraping imoti.info: {e}")
-    
-    # Scrape imoti.net
-    try:
-        scraper = ImotiNetScraper()
-        listings = scraper.scrape()
-        logger.info(f"imoti.net: scraped {len(listings)} listings")
-        all_listings.extend(listings)
-        active_source_ids['imotinet'] = [l['source_id'] for l in listings]
-    except Exception as e:
-        logger.error(f"Error scraping imoti.net: {e}")
-    
-    # Scrape property.bg
-    try:
-        scraper = PropertyBGScraper()
-        listings = scraper.scrape()
-        logger.info(f"property.bg: scraped {len(listings)} listings")
-        all_listings.extend(listings)
-        active_source_ids['propertybg'] = [l['source_id'] for l in listings]
-    except Exception as e:
-        logger.error(f"Error scraping property.bg: {e}")
+            active_source_ids[source_key] = [l['source_id'] for l in listings]
+            if recorder is not None:
+                status = "ok" if listings else "empty"
+                recorder.add_source(SourceResult(
+                    name=display_name, scraped=len(listings),
+                    duration_sec=round(_time.time() - t0, 1), status=status,
+                ))
+        except Exception as e:
+            logger.error(f"Error scraping {display_name}: {e}")
+            if recorder is not None:
+                recorder.add_source(SourceResult(
+                    name=display_name, scraped=0,
+                    duration_sec=round(_time.time() - t0, 1),
+                    status="error", error=str(e)[:200],
+                ))
+                recorder.add_error(f"{display_name}: {str(e)[:200]}")
     
     # Deduplicate listings before saving
     logger.info(f"Total raw listings: {len(all_listings)}")
@@ -287,7 +284,10 @@ def cmd_alerts():
         # Still mark all considered alerts as sent so they don't re-queue.
         for alert in unsent:
             alert_repo.mark_sent(alert.id)
-        return {'sent': 0, 'qualified': 0, 'considered': len(unsent)}
+        return {
+            'sent': 0, 'qualified': 0, 'considered': len(unsent),
+            'top_deals': [], 'by_neighborhood': [],
+        }
 
     digest_text = format_telegram_digest(
         top_deals=top_deals_payload,
@@ -297,6 +297,14 @@ def cmd_alerts():
     )
 
     ok = send_simple_message(digest_text)
+    # Serialize first_seen so the dict can be JSON-dumped for runs.json.
+    serializable_top = []
+    for d in top_deals_payload:
+        item = dict(d)
+        if hasattr(item.get('first_seen'), 'isoformat'):
+            item['first_seen'] = item['first_seen'].isoformat()
+        serializable_top.append(item)
+
     if ok:
         # Mark every considered alert sent — top 3 + the rest are now "processed".
         for alert in unsent:
@@ -305,10 +313,16 @@ def cmd_alerts():
             f"Sent digest with top {len(top)} of {len(qualified)} qualified deals; "
             f"marked {len(unsent)} alerts as sent"
         )
-        return {'sent': 1, 'qualified': len(qualified), 'considered': len(unsent)}
+        return {
+            'sent': 1, 'qualified': len(qualified), 'considered': len(unsent),
+            'top_deals': serializable_top, 'by_neighborhood': by_neighborhood_payload,
+        }
     else:
         logger.error("Digest send failed; alerts left unsent for retry next run")
-        return {'sent': 0, 'qualified': len(qualified), 'considered': len(unsent)}
+        return {
+            'sent': 0, 'qualified': len(qualified), 'considered': len(unsent),
+            'top_deals': serializable_top, 'by_neighborhood': by_neighborhood_payload,
+        }
 
 
 def _legacy_per_deal_alerts_DISABLED():
@@ -471,20 +485,92 @@ def cmd_export_dashboard():
 
 
 def cmd_full():
-    """Run full pipeline: scrape + analyze + alerts + dashboard export."""
+    """Run full pipeline: scrape + analyze + alerts + dashboard export.
+
+    Wrapped in a RunRecorder so per-source stats and timing land in runs.json
+    on the dashboard. Status.json is pushed at start and end so the dashboard's
+    StatusBadge can show "running" vs "idle" + last summary.
+    """
+    from src.observability import RunRecorder, write_status, append_run
+
     logger.info("Running full pipeline...")
 
-    # Step 1: Scrape
-    scraped = cmd_scrape()
+    rec = RunRecorder()
+    rec.start()
 
-    # Step 2: Analyze
-    anomalies = cmd_analyze()
+    # Push "running" state up-front so the dashboard knows immediately.
+    # Failure here is non-fatal — pipeline keeps going.
+    try:
+        write_status("running", summary={"started_at": rec.started_at})
+    except Exception as e:
+        logger.warning(f"Could not push 'running' status: {e}")
 
-    # Step 3: Alerts (Telegram digest — single message per run)
-    alerts_summary = cmd_alerts() or {}
+    try:
+        # Step 1: Scrape (recorder collects per-source results)
+        with rec.step("scrape"):
+            scraped = cmd_scrape(recorder=rec)
 
-    # Step 4: Refresh dashboard data + auto-deploy via Vercel
-    export_summary = cmd_export_dashboard()
+        # Step 2: Analyze (recompute z-scores; produce alerts)
+        with rec.step("analyze"):
+            anomalies = cmd_analyze()
+        rec.set_analysis(anomalies=anomalies, neighborhoods=0, groups_used=0)
+
+        # Step 3: Alerts (Telegram digest — single message per run)
+        with rec.step("alerts"):
+            alerts_summary = cmd_alerts() or {}
+        rec.set_digest(
+            sent=alerts_summary.get('sent', 0),
+            qualified=alerts_summary.get('qualified', 0),
+            considered=alerts_summary.get('considered', 0),
+            top_deals=alerts_summary.get('top_deals', []),
+        )
+
+        # Step 4: Refresh dashboard data + auto-deploy via Vercel
+        with rec.step("export"):
+            export_summary = cmd_export_dashboard()
+
+        # Compute final active count for the run record.
+        from src.database.models import get_db as _get_db
+        from src.database.repository import ListingRepository as _LRepo
+        _db = _get_db()
+        active_after = sum(
+            1 for l in _LRepo(_db).get_active()
+            if not getattr(l, 'is_duplicate', False)
+        )
+        rec.finalize(active_after=active_after, scraped_total=scraped)
+    except Exception as e:
+        rec.add_error(f"pipeline crash: {e}")
+        rec.finalize(active_after=0, scraped_total=0)
+        # Push error status before re-raising
+        try:
+            write_status("error", summary={"error": str(e)[:300], "run_id": rec.id})
+        except Exception:
+            pass
+        raise
+
+    # Append the completed run record to runs.json (no individual push — we
+    # piggyback on the dashboard export's push when possible, but this writes
+    # the file in-place; the export step above already pushed.)
+    try:
+        append_run(rec.to_dict(), push=True)
+    except Exception as e:
+        logger.warning(f"Could not append run record: {e}")
+
+    # Push final "idle" status with the summary block.
+    try:
+        write_status("idle", summary={
+            "last_run_id": rec.id,
+            "last_run_finished_at": rec.finished_at,
+            "duration_sec": rec.duration_sec,
+            "scraped_total": rec.totals.get("scraped_total", 0),
+            "active_after": rec.totals.get("active_after", 0),
+            "anomalies": rec.analysis.get("anomalies", 0),
+            "digest_sent": rec.digest.get("sent", 0),
+            "qualified": rec.digest.get("qualified", 0),
+            "status": rec.status,
+        })
+    except Exception as e:
+        logger.warning(f"Could not push 'idle' status: {e}")
 
     logger.info(
         f"Pipeline complete: {scraped} scraped, {anomalies} anomalies, "
