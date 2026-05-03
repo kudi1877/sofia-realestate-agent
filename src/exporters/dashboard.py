@@ -149,30 +149,110 @@ def _latest_savings_pct_for_listing(l: Listing) -> float | None:
 
 
 def _build_digest_payload(db: Session) -> Dict[str, Any]:
-    """Build daily-digest.json — summary card data for the dashboard.
+    """Build daily-digest.json in the schema the dashboard's DailyDigest tab expects.
 
-    Reuses daily_email's render path so the schema matches what the dashboard
-    already expects (we don't want two diverging digest formats).
+    The agent's `daily_email.py` produces an EMAIL-formatted context where
+    prices are pre-formatted strings ("15 000") — fine for HTML rendering but
+    breaks the dashboard, which wants raw numbers nested under a `summary`
+    block. So we transform the email context into a dashboard-friendly shape.
+
+    Schema (matches `DigestData` interface in components/DailyDigest.tsx):
+      {
+        generated_at: ISO,
+        summary: { total_active, new_today, price_drops, hot_deals },
+        new_deals: [{ id, source, url, title, price_eur, area_sqm, ... }],
+        price_drops: [...],
+        hot_districts: [...],
+        top_pick: {...} | null,
+      }
     """
     try:
         from src.alerts.daily_email import generate_daily_email  # heavy import
     except Exception as e:
         logger.warning(f"Could not import daily_email for digest: {e}")
-        return {"generated_at": datetime.utcnow().isoformat(), "summary": {}}
+        return _empty_digest()
 
     try:
-        # generate_daily_email returns (html, plain, context); we only want context.
-        _html, _plain, context = generate_daily_email()
-        return {**context, "generated_at_iso": datetime.utcnow().isoformat()}
+        _html, _plain, ctx = generate_daily_email()
     except Exception as e:
-        logger.warning(f"Daily digest render failed, falling back to minimal payload: {e}")
-        return {
-            "generated_at": datetime.utcnow().isoformat(),
-            "summary": {},
-            "new_deals": [],
-            "price_drops": [],
-            "hot_districts": [],
-        }
+        logger.warning(f"Daily digest render failed, falling back to empty: {e}")
+        return _empty_digest()
+
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "summary": {
+            "total_active":  int(ctx.get("total_active", 0) or 0),
+            "new_today":     int(ctx.get("new_today", 0) or 0),
+            "price_drops":   int(ctx.get("price_drops_count", 0) or 0),
+            "hot_deals":     len(ctx.get("new_deals", []) or []),
+        },
+        "new_deals":     [_dashboard_deal(d) for d in (ctx.get("new_deals") or [])],
+        "price_drops":   [_dashboard_drop(d) for d in (ctx.get("price_drops") or [])],
+        "hot_districts": [_dashboard_district(h) for h in (ctx.get("hot_districts") or [])],
+        "top_pick":      _dashboard_deal(ctx.get("top_pick")) if ctx.get("top_pick") else None,
+    }
+
+
+def _empty_digest() -> Dict[str, Any]:
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "summary": {"total_active": 0, "new_today": 0, "price_drops": 0, "hot_deals": 0},
+        "new_deals": [], "price_drops": [], "hot_districts": [], "top_pick": None,
+    }
+
+
+def _to_num(v: Any) -> float | None:
+    """Parse a number that might come in as a formatted string ('15 000', '1,200', '< -1.5')."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        # Strip thousand-separators (space, comma, NBSP) and stray symbols
+        cleaned = v.replace(" ", "").replace("\xa0", "").replace(",", "").replace("€", "").strip()
+        # Bail on sentinels like "< -1.5"
+        if cleaned.startswith("<") or cleaned.startswith(">"):
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
+
+
+def _dashboard_deal(d: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id":                d.get("id"),
+        "source":            d.get("source"),
+        "url":               d.get("url"),
+        "title":             d.get("title") or d.get("neighborhood"),
+        "price_eur":         _to_num(d.get("price_eur")),
+        "area_sqm":          _to_num(d.get("area_sqm")),
+        "price_per_sqm_eur": _to_num(d.get("price_per_sqm") or d.get("price_per_sqm_eur")),
+        "neighborhood":      d.get("neighborhood"),
+        "property_type":     d.get("property_type"),
+        "rooms":             _to_num(d.get("rooms")),
+        "zscore":            _to_num(d.get("zscore")),
+        "savings_pct":       _to_num(d.get("savings_pct")),
+    }
+
+
+def _dashboard_drop(d: Dict[str, Any]) -> Dict[str, Any]:
+    base = _dashboard_deal(d)
+    base.update({
+        "old_price":      _to_num(d.get("old_price") or d.get("first_price_eur")),
+        "price_drop_pct": _to_num(d.get("price_drop_pct") or d.get("drop_pct")),
+    })
+    return base
+
+
+def _dashboard_district(h: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "neighborhood":       h.get("neighborhood"),
+        "new_listings":       int(_to_num(h.get("new_listings")) or 0),
+        "avg_price_per_sqm":  _to_num(h.get("avg_price_per_sqm") or h.get("avg_price")) or 0,
+        "deal_count":         int(_to_num(h.get("deal_count")) or 0),
+    }
 
 
 # ── File writing ──────────────────────────────────────────────────────────────
