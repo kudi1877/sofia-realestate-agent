@@ -26,7 +26,8 @@ class HomesBgScraper:
     RESULTS_PER_PAGE = 20
     
     def __init__(self, max_pages: int = 50):
-        self.max_pages = max_pages  # 50 pages = 1000 listings
+        # Intentional sample: ~1,000 of ~11k listings keeps nightly runtime down.
+        self.max_pages = max_pages
         self.source_name = "homesbg"
     
     def _parse_listing(self, item: dict) -> Optional[Dict[str, Any]]:
