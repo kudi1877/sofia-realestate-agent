@@ -144,6 +144,7 @@ def should_replace_existing(existing: Dict[str, Any], new: Dict[str, Any]) -> bo
 class DeduplicationResult:
     """Result of deduplication process."""
     unique_listings: List[Dict[str, Any]]
+    duplicate_listings: List[Dict[str, Any]]
     duplicates_removed: int
     duplicates_by_source: Dict[str, int]
     canonical_ids: Dict[str, str]  # source_id -> canonical_id
@@ -169,6 +170,7 @@ def deduplicate_listings(listings: List[Dict[str, Any]]) -> DeduplicationResult:
         groups[fingerprint].append(listing)
     
     unique_listings = []
+    duplicate_listings = []
     duplicates_removed = 0
     duplicates_by_source = defaultdict(int)
     canonical_ids = {}
@@ -209,6 +211,7 @@ def deduplicate_listings(listings: List[Dict[str, Any]]) -> DeduplicationResult:
                 dup['canonical_id'] = canonical_id
                 dup['is_duplicate'] = True
                 dup['duplicate_of'] = best.get('source_id')
+                duplicate_listings.append(dup)
                 duplicates_removed += 1
                 duplicates_by_source[dup.get('source', 'unknown')] += 1
                 canonical_ids[dup.get('source_id', '')] = canonical_id
@@ -226,6 +229,7 @@ def deduplicate_listings(listings: List[Dict[str, Any]]) -> DeduplicationResult:
     
     return DeduplicationResult(
         unique_listings=unique_listings,
+        duplicate_listings=duplicate_listings,
         duplicates_removed=duplicates_removed,
         duplicates_by_source=dict(duplicates_by_source),
         canonical_ids=canonical_ids,

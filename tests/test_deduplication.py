@@ -69,3 +69,15 @@ def test_duplicate_counts_are_tracked_by_losing_source():
 
     assert result.duplicates_by_source == {"homesbg": 1}
     assert result.canonical_ids["homesbg-1"] == result.canonical_ids["imotiinfo-1"]
+
+
+def test_deduplication_result_exposes_flagged_duplicate_listings():
+    winner = listing(source="imotiinfo", source_id="imotiinfo-1")
+    duplicate = listing(source="imotbg", source_id="imotbg-1")
+
+    result = deduplicate_listings([winner, duplicate])
+
+    assert result.unique_listings == [winner]
+    assert result.duplicate_listings == [duplicate]
+    assert duplicate["is_duplicate"] is True
+    assert duplicate["duplicate_of"] == "imotiinfo-1"

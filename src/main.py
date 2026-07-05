@@ -89,16 +89,24 @@ def cmd_scrape(recorder=None):
         f"{dedup_result.duplicates_removed} duplicates removed"
     )
     
-    # Save unique listings to database
+    # Save unique winners plus flagged duplicates so DB duplicate flags stay fresh.
     saved_count = 0
-    for listing_data in dedup_result.unique_listings:
+    duplicate_saved_count = 0
+    listings_to_save = dedup_result.unique_listings + dedup_result.duplicate_listings
+    for listing_data in listings_to_save:
         try:
             repo.upsert(listing_data)
-            saved_count += 1
+            if listing_data.get('is_duplicate'):
+                duplicate_saved_count += 1
+            else:
+                saved_count += 1
         except Exception as e:
             logger.error(f"Error saving listing {listing_data.get('source_id')}: {e}")
     
-    logger.info(f"Saved {saved_count} unique listings to database")
+    logger.info(
+        f"Saved {saved_count} unique listings and "
+        f"{duplicate_saved_count} duplicate listings to database"
+    )
     
     # Mark inactive listings
     for source, ids in active_source_ids.items():
