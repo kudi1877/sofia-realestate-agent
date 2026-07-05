@@ -163,7 +163,10 @@ def detect_anomalies(
 
 def analyze_database(db: Session) -> List[AnomalyResult]:
     """Analyze all active listings in database."""
-    listings = db.query(Listing).filter(Listing.is_active == True).all()
+    listings = db.query(Listing).filter(
+        Listing.is_active == True,
+        (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)),
+    ).all()
     logger.info(f"Analyzing {len(listings)} active listings")
     
     if len(listings) < MIN_LISTINGS_PER_GROUP * 3:

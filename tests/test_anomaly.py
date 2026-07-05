@@ -1,7 +1,10 @@
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from src.analysis.anomaly import calculate_neighborhood_stats, detect_anomalies
-from src.database.models import Listing
+from src.analysis.anomaly import analyze_database, calculate_neighborhood_stats, detect_anomalies
+from src.config import MIN_LISTINGS_PER_GROUP
+from src.database.models import Base, Listing
 
 
 def listing(
@@ -11,10 +14,13 @@ def listing(
     property_type="apartment",
     construction_type="brick",
     area_sqm=100,
+    source_id=None,
+    is_duplicate=False,
 ):
     return Listing(
         source="test",
-        source_id=f"{neighborhood}-{property_type}-{construction_type}-{price_per_sqm}",
+        source_id=source_id
+        or f"{neighborhood}-{property_type}-{construction_type}-{price_per_sqm}",
         url="https://example.test/listing",
         neighborhood=neighborhood,
         property_type=property_type,
@@ -23,6 +29,7 @@ def listing(
         price_eur=price_per_sqm * area_sqm,
         price_per_sqm_eur=price_per_sqm,
         is_active=True,
+        is_duplicate=is_duplicate,
     )
 
 
@@ -94,3 +101,20 @@ def test_detection_falls_back_to_neighborhood_wide_group():
 
     assert len(anomalies) == 1
     assert anomalies[0].group_count == 12
+
+
+def test_analyze_database_excludes_active_duplicate_listings():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+
+    for index in range(MIN_LISTINGS_PER_GROUP * 3):
+        db.add(listing(1000, source_id=f"unique-{index}", is_duplicate=False))
+    duplicate = listing(500, source_id="duplicate-underpriced", is_duplicate=True)
+    db.add(duplicate)
+    db.commit()
+
+    anomalies = analyze_database(db)
+
+    assert anomalies == []
