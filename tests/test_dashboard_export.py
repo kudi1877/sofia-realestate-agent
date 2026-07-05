@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from src.database.models import Alert, Base, Listing
-from src.exporters.dashboard import _build_listings_payload
+from src.exporters.dashboard import _build_listings_payload, _write_json
 
 
 def session():
@@ -79,4 +79,32 @@ def test_build_listings_payload_eager_loads_alerts_and_preserves_latest_values()
     assert by_source["export-1"]["savings_pct"] == 15.4
     assert by_source["export-2"]["zscore"] == -1.75
     assert by_source["export-2"]["savings_pct"] == 8.2
+    assert "floor" not in by_source["export-1"]
+    assert "total_floors" not in by_source["export-1"]
+    assert "last_seen" not in by_source["export-1"]
     assert alert_selects == 1
+
+
+def test_build_listings_payload_omits_none_listing_values():
+    engine, db = session()
+    row = listing("export-no-alert")
+    row.rooms = None
+    row.construction_type = None
+    db.add(row)
+    db.commit()
+
+    payload = _build_listings_payload(db)
+
+    item = payload["listings"][0]
+    assert "rooms" not in item
+    assert "construction_type" not in item
+    assert "zscore" not in item
+    assert "savings_pct" not in item
+
+
+def test_write_json_uses_compact_separators(tmp_path):
+    path = tmp_path / "data.json"
+
+    _write_json(path, {"listings": [{"id": 1, "source": "test"}]})
+
+    assert path.read_text(encoding="utf-8") == '{"listings":[{"id":1,"source":"test"}]}'

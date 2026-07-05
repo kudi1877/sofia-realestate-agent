@@ -60,38 +60,36 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     for l in rows:
         zscore, savings_pct = _latest_alert_values_for_listing(l)
         listings.append(
-            {
-                "id": l.id,
-                "source": l.source,
-                "url": l.url,
-                "neighborhood": l.neighborhood,
-                "property_type": l.property_type,
-                "rooms": l.rooms,
-                "area_sqm": float(l.area_sqm) if l.area_sqm is not None else None,
-                "price_eur": float(l.price_eur) if l.price_eur is not None else None,
-                "price_per_sqm_eur": (
-                    round(float(l.price_per_sqm_eur), 2)
-                    if l.price_per_sqm_eur is not None
-                    else None
-                ),
-                "construction_type": l.construction_type,
-                "floor": l.floor,
-                "total_floors": l.total_floors,
-                # zscore + savings_pct are computed during analysis but stored on
-                # the Alert, not the Listing. The dashboard's anomaly highlighting
-                # uses the latest underpriced alert per listing.
-                "zscore": zscore,
-                "savings_pct": savings_pct,
-                # When we first scraped this ad → effectively the "added on" date
-                # for the user. last_seen tells you it's still being re-scraped
-                # (i.e. still active on the source site as of that timestamp).
-                "first_seen": l.first_seen.isoformat() if l.first_seen else None,
-                "last_seen": l.last_seen.isoformat() if l.last_seen else None,
-                # Soft-depreciation flag — true when the listing is still on the
-                # source site (we re-confirmed it in the latest scrape). False
-                # means we haven't seen it for ≥1 scrape but it's within 30d.
-                "is_active": bool(l.is_active),
-            }
+            _omit_none_values(
+                {
+                    "id": l.id,
+                    "source": l.source,
+                    "url": l.url,
+                    "neighborhood": l.neighborhood,
+                    "property_type": l.property_type,
+                    "rooms": l.rooms,
+                    "area_sqm": float(l.area_sqm) if l.area_sqm is not None else None,
+                    "price_eur": float(l.price_eur) if l.price_eur is not None else None,
+                    "price_per_sqm_eur": (
+                        round(float(l.price_per_sqm_eur), 2)
+                        if l.price_per_sqm_eur is not None
+                        else None
+                    ),
+                    "construction_type": l.construction_type,
+                    # zscore + savings_pct are computed during analysis but stored on
+                    # the Alert, not the Listing. The dashboard's anomaly highlighting
+                    # uses the latest underpriced alert per listing.
+                    "zscore": zscore,
+                    "savings_pct": savings_pct,
+                    # When we first scraped this ad → effectively the "added on" date
+                    # for the user.
+                    "first_seen": l.first_seen.isoformat() if l.first_seen else None,
+                    # Soft-depreciation flag — true when the listing is still on the
+                    # source site (we re-confirmed it in the latest scrape). False
+                    # means we haven't seen it for ≥1 scrape but it's within 30d.
+                    "is_active": bool(l.is_active),
+                }
+            )
         )
 
     # Neighborhood stats — for the price heatmap.
@@ -112,7 +110,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
 
     # Aggregate stats.
     total_listings = len(listings)
-    total_deals = sum(1 for l in listings if (l["zscore"] or 0) <= -1.5)
+    total_deals = sum(1 for l in listings if (l.get("zscore") or 0) <= -1.5)
     prices_per_sqm = [
         l["price_per_sqm_eur"] for l in listings if l["price_per_sqm_eur"]
     ]
@@ -130,6 +128,10 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         },
         "updatedAt": datetime.utcnow().isoformat(),
     }
+
+
+def _omit_none_values(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in item.items() if value is not None}
 
 
 def _latest_alert_values_for_listing(l: Listing) -> tuple[float | None, float | None]:
@@ -264,7 +266,7 @@ def _dashboard_district(h: Dict[str, Any]) -> Dict[str, Any]:
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
         encoding="utf-8",
     )
 
