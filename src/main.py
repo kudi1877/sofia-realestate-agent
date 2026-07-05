@@ -15,7 +15,7 @@ from src.scrapers.imotinet import ImotiNetScraper
 from src.scrapers.propertybg import PropertyBGScraper
 from src.analysis.anomaly import analyze_database, calculate_neighborhood_stats
 from src.analysis.trends import calculate_neighborhood_trends, generate_market_summary
-from src.alerts.telegram import format_deal_alert, format_simple_alert, should_send_alert, listing_to_alert
+from src.alerts.telegram import should_send_alert
 from src.config import MARK_INACTIVE_MIN_RATIO
 from src.utils.deduplication import deduplicate_listings, get_duplicate_stats
 
@@ -370,64 +370,6 @@ def cmd_alerts():
             'sent': 0, 'qualified': len(qualified), 'considered': len(unsent),
             'top_deals': serializable_top, 'by_neighborhood': by_neighborhood_payload,
         }
-
-
-def _legacy_per_deal_alerts_DISABLED():
-    """Old per-deal alert blaster. Kept here as a reference for what NOT to
-    do — sending one Telegram message per anomaly produced 750+ messages on
-    the first DB seed. The active path is `cmd_alerts` above.
-    """
-    db = get_db()
-    alert_repo = AlertRepository(db)
-    unsent = alert_repo.get_unsent()
-    messages = []
-    hood_repo = NeighborhoodRepository(db)
-    for alert in unsent:
-        if alert.alert_type == 'underpriced' and alert.listing:
-            if not should_send_alert(alert.zscore or 0, min_zscore=-1.5):
-                continue
-            hood = hood_repo.get_or_create(alert.listing.neighborhood) if alert.listing.neighborhood else None
-            hood_avg = getattr(hood, 'avg_price_per_sqm', None) if hood else None
-            if not hood_avg or hood_avg <= 0:
-                continue
-            listing_data = {
-                'id': alert.listing.id,
-                'neighborhood': alert.listing.neighborhood,
-                'price_eur': alert.listing.price_eur,
-                'area_sqm': alert.listing.area_sqm,
-                'price_per_sqm_eur': alert.listing.price_per_sqm_eur,
-                'rooms': alert.listing.rooms,
-                'property_type': alert.listing.property_type,
-                'url': alert.listing.url,
-                'source': alert.listing.source,
-            }
-            deal_alert = listing_to_alert(
-                listing_data,
-                zscore=alert.zscore or 0,
-                savings_pct=alert.savings_pct or 0,
-                savings_eur=alert.savings_eur or 0,
-            )
-            message = format_deal_alert(deal_alert)
-            messages.append({
-                'alert_id': alert.id,
-                'message': message,
-                'simple_message': format_simple_alert(
-                    neighborhood=alert.listing.neighborhood,
-                    price_eur=alert.listing.price_eur,
-                    savings_pct=alert.savings_pct or 0,
-                    url=alert.listing.url,
-                    rooms=alert.listing.rooms,
-                    area_sqm=alert.listing.area_sqm,
-                ),
-                'listing': alert.listing,
-                'zscore': alert.zscore,
-            })
-    from src.message_sender import send_deal_alerts
-    if messages:
-        sent_ids = send_deal_alerts(messages)
-        for alert_id in sent_ids:
-            alert_repo.mark_sent(alert_id)
-    return messages
 
 
 def cmd_stats():

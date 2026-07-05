@@ -1,7 +1,7 @@
 """Trend analysis for neighborhood prices."""
 
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
 from collections import defaultdict
 
 from sqlalchemy.orm import Session
@@ -9,13 +9,14 @@ from sqlalchemy import func
 from loguru import logger
 
 from src.database.models import Listing, PriceHistory, Neighborhood
+from src.utils.time import utc_now
 
 
 def calculate_neighborhood_trends(db: Session, days: int = 30) -> Dict[str, Any]:
     """Calculate price trends per neighborhood over time."""
     
     # Get current prices by neighborhood
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = utc_now() - timedelta(days=days)
     
     # Query active listings by neighborhood
     results = db.query(
@@ -88,7 +89,7 @@ def get_price_history(db: Session, listing_id: int) -> List[Dict[str, Any]]:
 
 def detect_price_drops(db: Session, days: int = 7) -> List[Dict[str, Any]]:
     """Detect listings with recent price drops."""
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = utc_now() - timedelta(days=days)
     
     # Get all price history entries in the period
     history = db.query(PriceHistory, Listing).join(Listing).filter(
@@ -167,5 +168,5 @@ def generate_market_summary(db: Session) -> Dict[str, Any]:
             for pt, avg, count in by_type
         },
         'by_zone': zone_averages,
-        'generated_at': datetime.utcnow().isoformat(),
+        'generated_at': utc_now().isoformat(),
     }

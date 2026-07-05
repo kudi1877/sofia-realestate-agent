@@ -1,11 +1,12 @@
 """Repository layer for database operations."""
 
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_, desc
 
 from src.database.models import Listing, PriceHistory, Neighborhood, Alert
+from src.utils.time import utc_now
 
 
 class ListingRepository:
@@ -46,12 +47,13 @@ class ListingRepository:
                 if hasattr(existing, key) and key not in ('first_price_eur', 'price_changes', 'is_sold', 'sold_date', 'days_on_market'):
                     setattr(existing, key, value)
             
-            existing.last_seen = datetime.utcnow()
+            now = utc_now()
+            existing.last_seen = now
             existing.is_active = True
             
             # Update days on market
             if existing.first_seen:
-                existing.days_on_market = (datetime.utcnow() - existing.first_seen).days
+                existing.days_on_market = (now - existing.first_seen).days
             
             if commit:
                 self.db.commit()
@@ -60,7 +62,7 @@ class ListingRepository:
         else:
             # Create new listing
             listing = Listing(**listing_data)
-            listing.first_seen = datetime.utcnow()
+            listing.first_seen = utc_now()
             listing.first_price_eur = listing_data["price_eur"]
             listing.price_changes = 0
             listing.days_on_market = 0
@@ -151,15 +153,16 @@ class ListingRepository:
         listing = self.get_by_source_id(source, source_id)
         if listing:
             listing.is_sold = True
-            listing.sold_date = datetime.utcnow()
+            now = utc_now()
+            listing.sold_date = now
             listing.is_active = False
             if listing.first_seen:
-                listing.days_on_market = (datetime.utcnow() - listing.first_seen).days
+                listing.days_on_market = (now - listing.first_seen).days
             self.db.commit()
     
     def get_sold(self, days: int = 30) -> List[Listing]:
         """Get recently sold listings."""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utc_now() - timedelta(days=days)
         return self.db.query(Listing).filter(
             and_(
                 Listing.is_sold == True,
@@ -169,7 +172,7 @@ class ListingRepository:
     
     def get_stale(self, days: int = 7) -> List[Listing]:
         """Get listings not seen in N days (potentially sold)."""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utc_now() - timedelta(days=days)
         return self.db.query(Listing).filter(
             and_(
                 Listing.is_active == True,
@@ -228,7 +231,7 @@ class NeighborhoodRepository:
         neighborhood.avg_price_per_sqm = avg_price
         neighborhood.median_price_per_sqm = median_price
         neighborhood.listing_count = count
-        neighborhood.updated_at = datetime.utcnow()
+        neighborhood.updated_at = utc_now()
         self.db.commit()
     
     def get_all(self) -> List[Neighborhood]:
@@ -271,7 +274,7 @@ class AlertRepository:
         """Mark alert as sent."""
         alert = self.db.query(Alert).filter(Alert.id == alert_id).first()
         if alert:
-            alert.sent_at = datetime.utcnow()
+            alert.sent_at = utc_now()
             self.db.commit()
     
     def exists_for_listing(self, listing_id: int, alert_type: str) -> bool:

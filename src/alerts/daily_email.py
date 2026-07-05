@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from jinja2 import Environment, FileSystemLoader
 
+from src.utils.time import utc_now
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent.parent.parent          # project root
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -53,7 +55,7 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 def _query_new_deals(conn: sqlite3.Connection, hours: int = 24) -> List[Dict[str, Any]]:
     """Listings with Z-score < -1.5 first seen in the last N hours."""
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    cutoff = (utc_now() - timedelta(hours=hours)).isoformat()
     rows = conn.execute("""
         SELECT l.*, 
                (SELECT AVG(l2.price_per_sqm_eur) 
@@ -153,7 +155,7 @@ def _query_price_drops(conn: sqlite3.Connection, min_drop_pct: float = 5.0) -> L
 
 def _query_district_velocity(conn: sqlite3.Connection, days: int = 7) -> List[Dict[str, Any]]:
     """Per-district: new listings added vs. listings that went inactive (proxy for sold)."""
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    cutoff = (utc_now() - timedelta(days=days)).isoformat()
 
     rows = conn.execute("""
         SELECT 
@@ -289,7 +291,7 @@ def _get_total_active(conn: sqlite3.Connection) -> int:
 
 
 def _get_new_today_count(conn: sqlite3.Connection, hours: int = 24) -> int:
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    cutoff = (utc_now() - timedelta(hours=hours)).isoformat()
     row = conn.execute("SELECT COUNT(*) as cnt FROM listings WHERE first_seen >= ?", (cutoff,)).fetchone()
     return dict(row).get("cnt", 0)
 
@@ -459,7 +461,7 @@ def generate_daily_email(
     digest_path = DATA_DIR / "latest_digest.json"
     digest_payload = {
         **context,
-        "generated_at_iso": datetime.utcnow().isoformat(),
+        "generated_at_iso": utc_now().isoformat(),
     }
     try:
         digest_path.write_text(json.dumps(digest_payload, ensure_ascii=False, indent=2, default=str))

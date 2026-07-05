@@ -1,8 +1,6 @@
 """Message sender — real Telegram Bot API delivery.
 
-Reads TELEGRAM_BOT_TOKEN from env (set in ~/.zshrc or .env). Default chat ID is
-the project owner's Telegram user ID; can be overridden via TELEGRAM_CHAT_ID env
-or the `target` argument.
+Reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from env (set in ~/.zshrc or .env).
 
 All formatters in src/alerts/telegram.py emit HTML markup (<b>, <a>, <i>), so we
 send with parse_mode=HTML. Long messages are auto-truncated to Telegram's 4096-char
@@ -18,8 +16,7 @@ from loguru import logger
 
 from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
-# Default target: project owner's Telegram (matches Hubert's TELEGRAM_ALLOWED_USER)
-DEFAULT_TELEGRAM_TARGET = TELEGRAM_CHAT_ID or "1787160163"
+DEFAULT_TELEGRAM_TARGET = TELEGRAM_CHAT_ID
 
 # Telegram API limits
 MAX_MESSAGE_LENGTH = 4096
@@ -41,6 +38,9 @@ def _send_message(
 
     Returns True on success, False on permanent failure. Logs at WARN/ERROR.
     """
+    if not chat_id:
+        raise ValueError("TELEGRAM_CHAT_ID must be set to send Telegram messages")
+
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
             "TELEGRAM_BOT_TOKEN not set — cannot send message. "

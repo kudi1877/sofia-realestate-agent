@@ -16,8 +16,7 @@ Auto-push:
 from __future__ import annotations
 
 import json
-import subprocess
-from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -26,6 +25,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from src.config import DASHBOARD_REPO_PATH, DASHBOARD_DATA_DIR, DASHBOARD_AUTO_PUSH
 from src.database.models import Listing, Neighborhood
+from src.utils.git import changed_files, commit_and_push
+from src.utils.time import utc_now
 
 
 # ── Listings JSON ─────────────────────────────────────────────────────────────
@@ -42,8 +43,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     # The frontend renders inactive ones dimmed and hides them by default
     # behind a "Show inactive" toggle. This way a partial scrape that fails
     # to confirm some listings doesn't make them vanish from the dashboard.
-    from datetime import datetime, timedelta
-    cutoff = datetime.utcnow() - timedelta(days=30)
+    cutoff = utc_now() - timedelta(days=30)
 
     rows = (
         db.query(Listing)
@@ -126,7 +126,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
             "totalDeals": total_deals,
             "avgPricePerSqm": avg_price_per_sqm,
         },
-        "updatedAt": datetime.utcnow().isoformat(),
+        "updatedAt": utc_now().isoformat(),
     }
 
 
@@ -184,7 +184,7 @@ def _build_digest_payload(db: Session) -> Dict[str, Any]:
         return _empty_digest()
 
     return {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": utc_now().isoformat(),
         "summary": {
             "total_active":  int(ctx.get("total_active", 0) or 0),
             "new_today":     int(ctx.get("new_today", 0) or 0),
@@ -200,7 +200,7 @@ def _build_digest_payload(db: Session) -> Dict[str, Any]:
 
 def _empty_digest() -> Dict[str, Any]:
     return {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": utc_now().isoformat(),
         "summary": {"total_active": 0, "new_today": 0, "price_drops": 0, "hot_deals": 0},
         "new_deals": [], "price_drops": [], "hot_districts": [], "top_pick": None,
     }
@@ -271,28 +271,12 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     )
 
 
-def _files_changed_in_git(repo: Path) -> List[str]:
-    """Return list of paths that are dirty in `repo` (relative to repo root)."""
-    result = subprocess.run(
-        ["git", "-C", str(repo), "status", "--porcelain"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    return [line[3:] for line in result.stdout.splitlines() if line.strip()]
-
-
-# ── Git commit + push ─────────────────────────────────────────────────────────
-
-
-def _commit_and_push(repo: Path, message: str) -> bool:
+def _commit_dashboard_data(repo: Path, message: str) -> bool:
     """Stage dashboard data JSON, commit, and push. No-op if no changes.
 
     Returns True if a commit was created and pushed, False if no changes (or fail).
     """
-    changed = _files_changed_in_git(repo)
+    changed = changed_files(repo)
     relevant = [
         f for f in changed
         if f in ("data/dashboard/data.json", "data/dashboard/daily-digest.json")
@@ -301,36 +285,10 @@ def _commit_and_push(repo: Path, message: str) -> bool:
         logger.info(f"No dashboard JSON changes in {repo} — skipping commit/push")
         return False
 
-    try:
-        subprocess.run(
-            ["git", "-C", str(repo), "add", *relevant],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(repo), "commit", "-m", message],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        push = subprocess.run(
-            ["git", "-C", str(repo), "push", "origin", "main"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if push.returncode != 0:
-            logger.error(f"Dashboard push failed: {push.stderr.strip()}")
-            return False
+    pushed = commit_and_push(repo, files=relevant, message=message)
+    if pushed:
         logger.info(f"Pushed dashboard data update to origin/main ({len(relevant)} file(s))")
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error(
-            f"Git op failed (rc={e.returncode}): "
-            f"stderr={e.stderr.strip() if e.stderr else ''}"
-        )
-        return False
+    return pushed
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -380,13 +338,13 @@ def export_dashboard(db: Session, push: bool | None = None) -> Dict[str, Any]:
     )
 
     if push:
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        timestamp = utc_now().strftime("%Y-%m-%d %H:%M UTC")
         msg = (
             f"data: refresh dashboard ({timestamp})\n\n"
             f"{summary['listings']} listings, {summary['deals']} deals, "
             f"{summary['neighborhoods']} neighborhoods.\n"
             f"Auto-generated by sofia-realestate-agent."
         )
-        summary["pushed"] = _commit_and_push(repo, msg)
+        summary["pushed"] = _commit_dashboard_data(repo, msg)
 
     return summary

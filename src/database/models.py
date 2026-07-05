@@ -203,8 +203,4 @@ def init_db():
 
 def get_db():
     """Get database session."""
-    db = SessionLocal()
-    try:
-        return db
-    finally:
-        db.close()
+    return SessionLocal()

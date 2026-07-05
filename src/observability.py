@@ -20,16 +20,15 @@ data during a run; .finalize() spits out the dict that ends up in runs.json.
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
 from src.config import DASHBOARD_REPO_PATH, DASHBOARD_DATA_DIR, DASHBOARD_AUTO_PUSH
+from src.utils.git import commit_and_push
+from src.utils.time import utc_now, utc_now_iso_z
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -68,7 +67,7 @@ class RunRecorder:
         rec.finalize(active_after=6678)
         # → rec.to_dict() ready to write into runs.json
     """
-    id: str = field(default_factory=lambda: f"run_{datetime.utcnow().strftime('%Y-%m-%dT%H%M%SZ')}")
+    id: str = field(default_factory=lambda: f"run_{utc_now().strftime('%Y-%m-%dT%H%M%SZ')}")
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     duration_sec: float = 0.0
@@ -177,7 +176,7 @@ class _StepCtx:
 
 
 def _utc_now_iso() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    return utc_now_iso_z(timespec="seconds")
 
 
 # ── File writers (status.json, runs.json) + git push ──────────────────────────
@@ -215,7 +214,7 @@ def write_status(
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if push:
-        return _commit_and_push(
+        return commit_and_push(
             DASHBOARD_REPO_PATH,
             files=["data/dashboard/status.json"],
             message=f"status: {state} ({_utc_now_iso()})",
@@ -258,44 +257,9 @@ def append_run(record: Dict[str, Any], *, push: Optional[bool] = None) -> bool:
     )
 
     if push:
-        return _commit_and_push(
+        return commit_and_push(
             DASHBOARD_REPO_PATH,
             files=["data/dashboard/runs.json"],
             message=f"runs: append {record.get('id', 'unknown')}",
         )
     return True
-
-
-# ── Git plumbing ──────────────────────────────────────────────────────────────
-
-
-def _commit_and_push(repo: Path, *, files: List[str], message: str) -> bool:
-    """Stage given files, commit, push. No-op if no diff."""
-    try:
-        # Anything to commit?
-        diff = subprocess.run(
-            ["git", "-C", str(repo), "status", "--porcelain", *files],
-            capture_output=True, text=True, check=False,
-        )
-        if not diff.stdout.strip():
-            return True  # nothing to do; treat as success
-
-        subprocess.run(
-            ["git", "-C", str(repo), "add", *files],
-            check=True, capture_output=True, text=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(repo), "commit", "-m", message],
-            check=True, capture_output=True, text=True,
-        )
-        push = subprocess.run(
-            ["git", "-C", str(repo), "push", "origin", "main"],
-            capture_output=True, text=True, check=False,
-        )
-        if push.returncode != 0:
-            logger.error(f"Push failed for {files}: {push.stderr.strip()}")
-            return False
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error(f"git op failed: {e.stderr.strip() if e.stderr else e}")
-        return False

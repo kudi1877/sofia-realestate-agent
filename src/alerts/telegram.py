@@ -1,7 +1,6 @@
 """Telegram alerts module for Sofia Real Estate Agent.
 
 Uses OpenClaw's native message tool for sending deal alerts.
-Target: Tino's Telegram (@TinTinTrading, ID: 1787160163)
 """
 
 from typing import List, Dict, Any, Optional
@@ -10,11 +9,11 @@ from datetime import datetime
 
 from loguru import logger
 
-from src.config import EUR_BGN_RATE
+from src.config import EUR_BGN_RATE, TELEGRAM_CHAT_ID
+from src.utils.time import utc_now
 
 
-# Tino's Telegram ID
-DEFAULT_TELEGRAM_ID = "1787160163"
+DEFAULT_TELEGRAM_ID = TELEGRAM_CHAT_ID
 
 
 @dataclass
@@ -105,7 +104,7 @@ def _format_added(first_seen: Any) -> str:
     # Strip tzinfo for the diff so we don't compare aware to naive.
     if dt.tzinfo is not None:
         dt = dt.replace(tzinfo=None)
-    delta = datetime.utcnow() - dt
+    delta = utc_now() - dt
     days = delta.days
     if days < 0:
         rel = "in the future"
@@ -271,7 +270,7 @@ def should_send_alert(zscore: float, min_zscore: float = -1.5) -> bool:
     return zscore <= min_zscore
 
 
-async def send_telegram_alert(message: str, target_id: str = DEFAULT_TELEGRAM_ID) -> bool:
+async def send_telegram_alert(message: str, target_id: str | None = DEFAULT_TELEGRAM_ID) -> bool:
     """Send alert via OpenClaw message tool.
     
     Args:
@@ -281,6 +280,9 @@ async def send_telegram_alert(message: str, target_id: str = DEFAULT_TELEGRAM_ID
     Returns:
         True if sent successfully
     """
+    if not target_id:
+        raise ValueError("TELEGRAM_CHAT_ID must be set to send Telegram alerts")
+
     try:
         # This function will be called from the main workflow
         # The actual sending is handled via OpenClaw's message tool
