@@ -54,3 +54,24 @@ def test_upsert_refreshes_duplicate_flags_and_price_on_existing_listing():
     assert unique_again.is_duplicate is False
     assert unique_again.duplicate_of is None
     assert unique_again.price_eur == 94000
+
+
+def test_upsert_commit_false_preserves_price_history_rows():
+    db = session()
+    repo = ListingRepository(db)
+
+    created = repo.upsert(listing_data(source_id="history-1"), commit=False)
+    db.commit()
+
+    history = repo.get_price_history(created.id)
+    assert len(history) == 1
+    assert history[0].price_eur == 100000
+
+    repo.upsert(
+        listing_data(source_id="history-1", price_eur=90000, price_per_sqm_eur=1800),
+        commit=False,
+    )
+    db.commit()
+
+    history = repo.get_price_history(created.id)
+    assert [row.price_eur for row in history] == [100000, 100000]

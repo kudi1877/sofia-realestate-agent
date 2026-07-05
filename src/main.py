@@ -94,15 +94,39 @@ def cmd_scrape(recorder=None):
     saved_count = 0
     duplicate_saved_count = 0
     listings_to_save = dedup_result.unique_listings + dedup_result.duplicate_listings
+    pending_count = 0
+    pending_saved_count = 0
+    pending_duplicate_count = 0
+    batch_size = 500
+
+    def reset_pending_counts():
+        nonlocal pending_count, pending_saved_count, pending_duplicate_count
+        pending_count = 0
+        pending_saved_count = 0
+        pending_duplicate_count = 0
+
     for listing_data in listings_to_save:
         try:
-            repo.upsert(listing_data)
+            repo.upsert(listing_data, commit=False)
+            pending_count += 1
             if listing_data.get('is_duplicate'):
                 duplicate_saved_count += 1
+                pending_duplicate_count += 1
             else:
                 saved_count += 1
+                pending_saved_count += 1
+            if pending_count >= batch_size:
+                db.commit()
+                reset_pending_counts()
         except Exception as e:
             logger.error(f"Error saving listing {listing_data.get('source_id')}: {e}")
+            db.rollback()
+            saved_count -= pending_saved_count
+            duplicate_saved_count -= pending_duplicate_count
+            reset_pending_counts()
+
+    if pending_count:
+        db.commit()
     
     logger.info(
         f"Saved {saved_count} unique listings and "

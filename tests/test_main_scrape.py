@@ -23,8 +23,10 @@ class FakeRepo:
         self.marked_inactive = []
         self.active_counts = active_counts or {}
 
-    def upsert(self, listing_data):
-        self.upserted.append(dict(listing_data))
+    def upsert(self, listing_data, commit=True):
+        row = dict(listing_data)
+        row["_commit"] = commit
+        self.upserted.append(row)
 
     def mark_inactive(self, source, active_ids):
         self.marked_inactive.append((source, active_ids))
@@ -42,10 +44,23 @@ class FakeScraper:
         return [dict(row) for row in self.rows]
 
 
+class FakeDb:
+    def __init__(self):
+        self.commits = 0
+        self.rollbacks = 0
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
 def test_cmd_scrape_upserts_unique_winners_and_flagged_duplicates(monkeypatch):
     repo = FakeRepo(active_counts={"imotbg": 1, "imotiinfo": 1})
+    db = FakeDb()
 
-    monkeypatch.setattr(main_module, "get_db", lambda: object())
+    monkeypatch.setattr(main_module, "get_db", lambda: db)
     monkeypatch.setattr(main_module, "ListingRepository", lambda db: repo)
     monkeypatch.setattr(main_module, "update_neighborhood_stats", lambda db: None)
     monkeypatch.setattr(
@@ -70,14 +85,17 @@ def test_cmd_scrape_upserts_unique_winners_and_flagged_duplicates(monkeypatch):
     assert by_source_id["imotiinfo-1"]["is_duplicate"] is False
     assert by_source_id["imotbg-1"]["is_duplicate"] is True
     assert by_source_id["imotbg-1"]["duplicate_of"] == "imotiinfo-1"
+    assert {row["_commit"] for row in repo.upserted} == {False}
+    assert db.commits == 1
 
 
 def test_cmd_scrape_skips_mark_inactive_for_partial_source(monkeypatch):
     repo = FakeRepo(active_counts={"imotbg": 10})
     recorder = RunRecorder()
+    db = FakeDb()
 
     monkeypatch.setattr(main_module, "MARK_INACTIVE_MIN_RATIO", 0.5)
-    monkeypatch.setattr(main_module, "get_db", lambda: object())
+    monkeypatch.setattr(main_module, "get_db", lambda: db)
     monkeypatch.setattr(main_module, "ListingRepository", lambda db: repo)
     monkeypatch.setattr(main_module, "update_neighborhood_stats", lambda db: None)
     monkeypatch.setattr(
@@ -101,9 +119,10 @@ def test_cmd_scrape_skips_mark_inactive_for_partial_source(monkeypatch):
 
 def test_cmd_scrape_marks_inactive_when_source_count_is_normal(monkeypatch):
     repo = FakeRepo(active_counts={"imotbg": 10})
+    db = FakeDb()
 
     monkeypatch.setattr(main_module, "MARK_INACTIVE_MIN_RATIO", 0.5)
-    monkeypatch.setattr(main_module, "get_db", lambda: object())
+    monkeypatch.setattr(main_module, "get_db", lambda: db)
     monkeypatch.setattr(main_module, "ListingRepository", lambda db: repo)
     monkeypatch.setattr(main_module, "update_neighborhood_stats", lambda db: None)
     monkeypatch.setattr(

@@ -20,7 +20,7 @@ class ListingRepository:
             and_(Listing.source == source, Listing.source_id == source_id)
         ).first()
     
-    def upsert(self, listing_data: Dict[str, Any]) -> Listing:
+    def upsert(self, listing_data: Dict[str, Any], commit: bool = True) -> Listing:
         """Insert or update a listing."""
         existing = self.get_by_source_id(
             listing_data["source"], 
@@ -53,8 +53,9 @@ class ListingRepository:
             if existing.first_seen:
                 existing.days_on_market = (datetime.utcnow() - existing.first_seen).days
             
-            self.db.commit()
-            self.db.refresh(existing)
+            if commit:
+                self.db.commit()
+                self.db.refresh(existing)
             return existing
         else:
             # Create new listing
@@ -64,8 +65,11 @@ class ListingRepository:
             listing.price_changes = 0
             listing.days_on_market = 0
             self.db.add(listing)
-            self.db.commit()
-            self.db.refresh(listing)
+            if commit:
+                self.db.commit()
+                self.db.refresh(listing)
+            else:
+                self.db.flush()
             
             # Record initial price
             price_history = PriceHistory(
@@ -74,7 +78,8 @@ class ListingRepository:
                 price_per_sqm_eur=listing.price_per_sqm_eur,
             )
             self.db.add(price_history)
-            self.db.commit()
+            if commit:
+                self.db.commit()
             
             return listing
     
