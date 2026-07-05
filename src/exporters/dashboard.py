@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from loguru import logger
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from src.config import DASHBOARD_REPO_PATH, DASHBOARD_AUTO_PUSH
 from src.database.models import Listing, Neighborhood
@@ -47,6 +47,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
 
     rows = (
         db.query(Listing)
+        .options(selectinload(Listing.alerts))
         .filter((Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)))
         .filter(
             (Listing.is_active.is_(True))
@@ -57,6 +58,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
 
     listings: List[Dict[str, Any]] = []
     for l in rows:
+        zscore, savings_pct = _latest_alert_values_for_listing(l)
         listings.append(
             {
                 "id": l.id,
@@ -78,8 +80,8 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                 # zscore + savings_pct are computed during analysis but stored on
                 # the Alert, not the Listing. The dashboard's anomaly highlighting
                 # uses the latest underpriced alert per listing.
-                "zscore": _latest_zscore_for_listing(l),
-                "savings_pct": _latest_savings_pct_for_listing(l),
+                "zscore": zscore,
+                "savings_pct": savings_pct,
                 # When we first scraped this ad → effectively the "added on" date
                 # for the user. last_seen tells you it's still being re-scraped
                 # (i.e. still active on the source site as of that timestamp).
@@ -130,19 +132,20 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     }
 
 
-def _latest_zscore_for_listing(l: Listing) -> float | None:
-    """Pull the zscore from the most recent 'underpriced' alert, if any."""
+def _latest_alert_values_for_listing(l: Listing) -> tuple[float | None, float | None]:
+    """Pull latest zscore/savings values from underpriced alerts in one pass."""
+    zscore = None
+    savings_pct = None
     for alert in sorted(l.alerts or [], key=lambda a: a.id, reverse=True):
-        if alert.alert_type == "underpriced" and alert.zscore is not None:
-            return round(float(alert.zscore), 3)
-    return None
-
-
-def _latest_savings_pct_for_listing(l: Listing) -> float | None:
-    for alert in sorted(l.alerts or [], key=lambda a: a.id, reverse=True):
-        if alert.alert_type == "underpriced" and alert.savings_pct is not None:
-            return round(float(alert.savings_pct), 1)
-    return None
+        if alert.alert_type != "underpriced":
+            continue
+        if zscore is None and alert.zscore is not None:
+            zscore = round(float(alert.zscore), 3)
+        if savings_pct is None and alert.savings_pct is not None:
+            savings_pct = round(float(alert.savings_pct), 1)
+        if zscore is not None and savings_pct is not None:
+            break
+    return zscore, savings_pct
 
 
 # ── Daily digest JSON ─────────────────────────────────────────────────────────
