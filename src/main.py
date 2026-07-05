@@ -16,6 +16,7 @@ from src.scrapers.propertybg import PropertyBGScraper
 from src.analysis.anomaly import analyze_database, calculate_neighborhood_stats
 from src.analysis.trends import calculate_neighborhood_trends, generate_market_summary
 from src.alerts.telegram import format_deal_alert, format_simple_alert, should_send_alert, listing_to_alert
+from src.config import MARK_INACTIVE_MIN_RATIO
 from src.utils.deduplication import deduplicate_listings, get_duplicate_stats
 
 
@@ -110,6 +111,20 @@ def cmd_scrape(recorder=None):
     
     # Mark inactive listings
     for source, ids in active_source_ids.items():
+        active_count = repo.count_active_by_source(source)
+        scraped_count = len(ids)
+        if active_count > 0:
+            ratio = scraped_count / active_count
+            if ratio < MARK_INACTIVE_MIN_RATIO:
+                message = (
+                    f"Skipping mark_inactive for {source}: scraped {scraped_count} "
+                    f"listings vs {active_count} active in DB "
+                    f"({ratio:.1%} < {MARK_INACTIVE_MIN_RATIO:.0%})"
+                )
+                logger.warning(message)
+                if recorder is not None:
+                    recorder.add_error(message)
+                continue
         if ids:
             marked = repo.mark_inactive(source, ids)
             logger.info(f"Marked {marked} {source} listings as inactive")

@@ -1,4 +1,5 @@
 from src import main as main_module
+from src.observability import RunRecorder
 
 
 def listing(source, source_id):
@@ -17,9 +18,10 @@ def listing(source, source_id):
 
 
 class FakeRepo:
-    def __init__(self):
+    def __init__(self, active_counts=None):
         self.upserted = []
         self.marked_inactive = []
+        self.active_counts = active_counts or {}
 
     def upsert(self, listing_data):
         self.upserted.append(dict(listing_data))
@@ -27,6 +29,9 @@ class FakeRepo:
     def mark_inactive(self, source, active_ids):
         self.marked_inactive.append((source, active_ids))
         return 0
+
+    def count_active_by_source(self, source):
+        return self.active_counts.get(source, 0)
 
 
 class FakeScraper:
@@ -38,7 +43,7 @@ class FakeScraper:
 
 
 def test_cmd_scrape_upserts_unique_winners_and_flagged_duplicates(monkeypatch):
-    repo = FakeRepo()
+    repo = FakeRepo(active_counts={"imotbg": 1, "imotiinfo": 1})
 
     monkeypatch.setattr(main_module, "get_db", lambda: object())
     monkeypatch.setattr(main_module, "ListingRepository", lambda db: repo)
@@ -65,3 +70,52 @@ def test_cmd_scrape_upserts_unique_winners_and_flagged_duplicates(monkeypatch):
     assert by_source_id["imotiinfo-1"]["is_duplicate"] is False
     assert by_source_id["imotbg-1"]["is_duplicate"] is True
     assert by_source_id["imotbg-1"]["duplicate_of"] == "imotiinfo-1"
+
+
+def test_cmd_scrape_skips_mark_inactive_for_partial_source(monkeypatch):
+    repo = FakeRepo(active_counts={"imotbg": 10})
+    recorder = RunRecorder()
+
+    monkeypatch.setattr(main_module, "MARK_INACTIVE_MIN_RATIO", 0.5)
+    monkeypatch.setattr(main_module, "get_db", lambda: object())
+    monkeypatch.setattr(main_module, "ListingRepository", lambda db: repo)
+    monkeypatch.setattr(main_module, "update_neighborhood_stats", lambda db: None)
+    monkeypatch.setattr(
+        main_module,
+        "ImotBgScraper",
+        lambda: FakeScraper([listing("imotbg", f"imotbg-{index}") for index in range(4)]),
+    )
+    monkeypatch.setattr(main_module, "HomesBgScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "ImotiInfoScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "ImotiNetScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "PropertyBGScraper", lambda: FakeScraper([]))
+
+    main_module.cmd_scrape(recorder=recorder)
+
+    assert repo.marked_inactive == []
+    assert recorder.status == "partial"
+    assert recorder.errors == [
+        "Skipping mark_inactive for imotbg: scraped 4 listings vs 10 active in DB (40.0% < 50%)"
+    ]
+
+
+def test_cmd_scrape_marks_inactive_when_source_count_is_normal(monkeypatch):
+    repo = FakeRepo(active_counts={"imotbg": 10})
+
+    monkeypatch.setattr(main_module, "MARK_INACTIVE_MIN_RATIO", 0.5)
+    monkeypatch.setattr(main_module, "get_db", lambda: object())
+    monkeypatch.setattr(main_module, "ListingRepository", lambda db: repo)
+    monkeypatch.setattr(main_module, "update_neighborhood_stats", lambda db: None)
+    monkeypatch.setattr(
+        main_module,
+        "ImotBgScraper",
+        lambda: FakeScraper([listing("imotbg", f"imotbg-{index}") for index in range(6)]),
+    )
+    monkeypatch.setattr(main_module, "HomesBgScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "ImotiInfoScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "ImotiNetScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "PropertyBGScraper", lambda: FakeScraper([]))
+
+    main_module.cmd_scrape()
+
+    assert repo.marked_inactive == [("imotbg", [f"imotbg-{index}" for index in range(6)])]

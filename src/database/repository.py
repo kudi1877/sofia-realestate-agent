@@ -106,6 +106,15 @@ class ListingRepository:
         ).update({"is_active": False}, synchronize_session=False)
         self.db.commit()
         return result
+
+    def count_active_by_source(self, source: str) -> int:
+        """Count active listings for a source."""
+        return self.db.query(func.count(Listing.id)).filter(
+            and_(
+                Listing.source == source,
+                Listing.is_active == True,
+            )
+        ).scalar() or 0
     
     def get_price_history(self, listing_id: int) -> List[PriceHistory]:
         """Get price history for a listing, ordered by date."""

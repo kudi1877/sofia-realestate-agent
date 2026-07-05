@@ -18,6 +18,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/listings.db")
 # Scraping settings
 SCRAPE_DELAY_MIN = float(os.getenv("SCRAPE_DELAY_MIN", "1.0"))
 SCRAPE_DELAY_MAX = float(os.getenv("SCRAPE_DELAY_MAX", "3.0"))
+MARK_INACTIVE_MIN_RATIO = float(os.getenv("MARK_INACTIVE_MIN_RATIO", "0.5"))
 
 # Analysis settings
 ANOMALY_ZSCORE_THRESHOLD = float(os.getenv("ANOMALY_ZSCORE_THRESHOLD", "-1.5"))
