@@ -15,13 +15,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from jinja2 import Environment, FileSystemLoader
 
+from src.config import ANOMALY_ZSCORE_THRESHOLD, DASHBOARD_DATA_DIR, PRICE_DROP_PCT_THRESHOLD
 from src.utils.time import utc_now
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent.parent.parent          # project root
 TEMPLATES_DIR = BASE_DIR / "templates"
 DATA_DIR = BASE_DIR / "data"
-DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "sofia-realestate-dashboard"
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 
 def _query_new_deals(conn: sqlite3.Connection, hours: int = 24) -> List[Dict[str, Any]]:
-    """Listings with Z-score < -1.5 first seen in the last N hours."""
+    """Listings with configured underpriced Z-score first seen in the last N hours."""
     cutoff = (utc_now() - timedelta(hours=hours)).isoformat()
     rows = conn.execute("""
         SELECT l.*, 
@@ -67,10 +67,10 @@ def _query_new_deals(conn: sqlite3.Connection, hours: int = 24) -> List[Dict[str
         LEFT JOIN alerts a ON a.listing_id = l.id AND a.alert_type = 'underpriced'
         WHERE l.is_active = 1
           AND l.first_seen >= ?
-          AND (a.zscore IS NOT NULL AND a.zscore < -1.5)
+          AND (a.zscore IS NOT NULL AND a.zscore < ?)
         ORDER BY a.zscore ASC
         LIMIT 10
-    """, (cutoff,)).fetchall()
+    """, (cutoff, ANOMALY_ZSCORE_THRESHOLD)).fetchall()
 
     # If no alert-based results, fall back to z-score column in data.json export
     if not rows:
@@ -111,7 +111,11 @@ def _query_new_deals(conn: sqlite3.Connection, hours: int = 24) -> List[Dict[str
             "total_floors": r.get("total_floors"),
             "price_eur": _fmt_price(r.get("price_eur")),
             "price_per_sqm": _fmt_price(r.get("price_per_sqm_eur")),
-            "zscore": f"{r.get('zscore', 0) or 0:.2f}" if r.get('zscore') else "< -1.5",
+            "zscore": (
+                f"{r.get('zscore', 0) or 0:.2f}"
+                if r.get('zscore')
+                else f"< {ANOMALY_ZSCORE_THRESHOLD:g}"
+            ),
             "savings_eur": _fmt_price(max(savings_eur, 0)),
             "savings_pct": f"{max(savings_pct, 0):.1f}",
             "url": r.get("url", "#"),
@@ -120,7 +124,10 @@ def _query_new_deals(conn: sqlite3.Connection, hours: int = 24) -> List[Dict[str
     return deals
 
 
-def _query_price_drops(conn: sqlite3.Connection, min_drop_pct: float = 5.0) -> List[Dict[str, Any]]:
+def _query_price_drops(
+    conn: sqlite3.Connection,
+    min_drop_pct: float = PRICE_DROP_PCT_THRESHOLD,
+) -> List[Dict[str, Any]]:
     """Listings whose current price is ≥ min_drop_pct below first recorded price."""
     rows = conn.execute("""
         SELECT *,
@@ -201,7 +208,7 @@ def _query_district_velocity(conn: sqlite3.Connection, days: int = 7) -> List[Di
 
 
 def _query_top_pick(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
-    """Best single opportunity: highest savings % with Z-score < -1.5, active, apartment."""
+    """Best single opportunity: highest savings %, active, apartment."""
     # Try alerts table first
     row = conn.execute("""
         SELECT l.*, a.zscore, a.savings_eur, a.savings_pct,
@@ -213,12 +220,12 @@ def _query_top_pick(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
         FROM alerts a
         JOIN listings l ON l.id = a.listing_id
         WHERE l.is_active = 1
-          AND a.zscore < -1.5
+          AND a.zscore < ?
           AND l.property_type = 'apartment'
           AND a.savings_pct > 0
         ORDER BY a.savings_pct DESC
         LIMIT 1
-    """).fetchone()
+    """, (ANOMALY_ZSCORE_THRESHOLD,)).fetchone()
 
     if not row:
         # Fallback: cheapest per-sqm active apartment relative to neighborhood
@@ -468,11 +475,11 @@ def generate_daily_email(
     except Exception:
         pass  # non-critical
 
-    # Also copy to dashboard public dir if it exists
-    dash_public = DASHBOARD_DIR / "public"
-    if dash_public.exists():
+    # Also copy to the dashboard data dir if that repo exists locally.
+    if DASHBOARD_DATA_DIR.parent.exists():
         try:
-            (dash_public / "daily-digest.json").write_text(
+            DASHBOARD_DATA_DIR.mkdir(parents=True, exist_ok=True)
+            (DASHBOARD_DATA_DIR / "daily-digest.json").write_text(
                 json.dumps(digest_payload, ensure_ascii=False, indent=2, default=str)
             )
         except Exception:
@@ -495,7 +502,7 @@ def _render_plain_text(ctx: Dict[str, Any]) -> str:
     ]
 
     if ctx.get("new_deals"):
-        lines.append("═══ 🔥 New Deals (Z-score < -1.5) ═══")
+        lines.append(f"═══ 🔥 New Deals (Z-score < {ANOMALY_ZSCORE_THRESHOLD:g}) ═══")
         for d in ctx["new_deals"]:
             lines.append(f"  📍 {d['neighborhood']} — {d['rooms_text']}, {d['area_sqm']}m²")
             lines.append(f"     €{d['price_eur']} (€{d['price_per_sqm']}/m²) | Z: {d['zscore']} | Save {d['savings_pct']}%")
@@ -503,7 +510,7 @@ def _render_plain_text(ctx: Dict[str, Any]) -> str:
             lines.append("")
 
     if ctx.get("price_drops"):
-        lines.append("═══ 📉 Price Drops (5%+) ═══")
+        lines.append(f"═══ 📉 Price Drops ({PRICE_DROP_PCT_THRESHOLD:g}%+) ═══")
         for d in ctx["price_drops"]:
             lines.append(f"  📍 {d['neighborhood']} — {d['rooms_text']}, {d['area_sqm']}m²")
             lines.append(f"     €{d['old_price']} → €{d['new_price']} (-{d['drop_pct']}%)")
