@@ -505,7 +505,7 @@ def cmd_dedup_stats():
 def cmd_export_dashboard():
     """Regenerate dashboard JSON files from DB; auto-commit + push if enabled.
 
-    Writes <DASHBOARD_REPO_PATH>/public/data.json and daily-digest.json. When
+    Writes <DASHBOARD_REPO_PATH>/data/dashboard/data.json and daily-digest.json. When
     DASHBOARD_AUTO_PUSH is on (default), commits and pushes those files so
     Vercel re-deploys automatically.
     """

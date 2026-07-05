@@ -1,6 +1,6 @@
 """Observability: track pipeline runs + push status to the dashboard.
 
-Two artifacts are written into the dashboard repo's public/ dir:
+Two artifacts are written into the dashboard repo's data/dashboard/ dir:
 
   status.json — short, frequently-overwritten file with the agent's current
                 state. Polled by the dashboard's StatusBadge every 20s.
@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.config import DASHBOARD_REPO_PATH, DASHBOARD_AUTO_PUSH
+from src.config import DASHBOARD_REPO_PATH, DASHBOARD_DATA_DIR, DASHBOARD_AUTO_PUSH
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ def write_status(
     summary: Optional[Dict[str, Any]] = None,
     push: Optional[bool] = None,
 ) -> bool:
-    """Write public/status.json in the dashboard repo. Optionally git-push.
+    """Write data/dashboard/status.json in the dashboard repo. Optionally git-push.
 
     `state` is "running" | "idle" | "error". `summary` is optional last-run
     data (counts, duration, etc.) — typically only set when state="idle".
@@ -199,9 +199,9 @@ def write_status(
     if push is None:
         push = DASHBOARD_AUTO_PUSH
 
-    public = DASHBOARD_REPO_PATH / "public"
-    if not public.exists():
-        logger.warning(f"Dashboard public/ not found at {public}; skipping status update")
+    data_dir = DASHBOARD_DATA_DIR
+    if not data_dir.parent.exists():
+        logger.warning(f"Dashboard data dir not found at {data_dir.parent}; skipping status update")
         return False
 
     payload = {
@@ -210,20 +210,21 @@ def write_status(
         "summary": summary or {},
     }
 
-    target = public / "status.json"
+    target = data_dir / "status.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if push:
         return _commit_and_push(
             DASHBOARD_REPO_PATH,
-            files=["public/status.json"],
+            files=["data/dashboard/status.json"],
             message=f"status: {state} ({_utc_now_iso()})",
         )
     return True
 
 
 def append_run(record: Dict[str, Any], *, push: Optional[bool] = None) -> bool:
-    """Append a finalized run record to public/runs.json (capped to N entries).
+    """Append a finalized run record to data/dashboard/runs.json (capped to N entries).
 
     Pushed alongside data.json + status.json by the export step (caller can
     chain via push=False here and let export_dashboard's commit grab it).
@@ -231,12 +232,13 @@ def append_run(record: Dict[str, Any], *, push: Optional[bool] = None) -> bool:
     if push is None:
         push = DASHBOARD_AUTO_PUSH
 
-    public = DASHBOARD_REPO_PATH / "public"
-    if not public.exists():
-        logger.warning(f"Dashboard public/ not found at {public}; skipping runs append")
+    data_dir = DASHBOARD_DATA_DIR
+    if not data_dir.parent.exists():
+        logger.warning(f"Dashboard data dir not found at {data_dir.parent}; skipping runs append")
         return False
 
-    runs_file = public / "runs.json"
+    runs_file = data_dir / "runs.json"
+    runs_file.parent.mkdir(parents=True, exist_ok=True)
 
     history: List[Dict[str, Any]] = []
     if runs_file.exists():
@@ -258,7 +260,7 @@ def append_run(record: Dict[str, Any], *, push: Optional[bool] = None) -> bool:
     if push:
         return _commit_and_push(
             DASHBOARD_REPO_PATH,
-            files=["public/runs.json"],
+            files=["data/dashboard/runs.json"],
             message=f"runs: append {record.get('id', 'unknown')}",
         )
     return True

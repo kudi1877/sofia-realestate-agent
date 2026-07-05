@@ -1,8 +1,8 @@
 """Dashboard data exporter.
 
 Regenerates the two JSON files the Next.js dashboard reads from disk:
-  - public/data.json          (all listings + neighborhood stats + aggregate)
-  - public/daily-digest.json  (today's new deals, price drops, hot districts)
+  - data/dashboard/data.json          (all listings + neighborhood stats + aggregate)
+  - data/dashboard/daily-digest.json  (today's new deals, price drops, hot districts)
 
 Optionally git-commits and pushes the dashboard repo so Vercel auto-deploys.
 
@@ -24,7 +24,7 @@ from typing import Any, Dict, List
 from loguru import logger
 from sqlalchemy.orm import Session, selectinload
 
-from src.config import DASHBOARD_REPO_PATH, DASHBOARD_AUTO_PUSH
+from src.config import DASHBOARD_REPO_PATH, DASHBOARD_DATA_DIR, DASHBOARD_AUTO_PUSH
 from src.database.models import Listing, Neighborhood
 
 
@@ -288,12 +288,15 @@ def _files_changed_in_git(repo: Path) -> List[str]:
 
 
 def _commit_and_push(repo: Path, message: str) -> bool:
-    """Stage data.json + daily-digest.json, commit, and push. No-op if no changes.
+    """Stage dashboard data JSON, commit, and push. No-op if no changes.
 
     Returns True if a commit was created and pushed, False if no changes (or fail).
     """
     changed = _files_changed_in_git(repo)
-    relevant = [f for f in changed if f in ("public/data.json", "public/daily-digest.json")]
+    relevant = [
+        f for f in changed
+        if f in ("data/dashboard/data.json", "data/dashboard/daily-digest.json")
+    ]
     if not relevant:
         logger.info(f"No dashboard JSON changes in {repo} — skipping commit/push")
         return False
@@ -347,28 +350,28 @@ def export_dashboard(db: Session, push: bool | None = None) -> Dict[str, Any]:
         push = DASHBOARD_AUTO_PUSH
 
     repo = DASHBOARD_REPO_PATH
-    public = repo / "public"
-    if not public.exists():
+    data_dir = DASHBOARD_DATA_DIR
+    if not data_dir.parent.exists():
         logger.error(
-            f"Dashboard public/ dir not found at {public}. "
+            f"Dashboard data parent dir not found at {data_dir.parent}. "
             f"Set DASHBOARD_REPO_PATH env var to the dashboard repo root."
         )
-        return {"ok": False, "reason": "dashboard_path_missing", "path": str(public)}
+        return {"ok": False, "reason": "dashboard_path_missing", "path": str(data_dir)}
 
-    logger.info(f"Exporting dashboard data → {public}")
+    logger.info(f"Exporting dashboard data → {data_dir}")
 
     listings_payload = _build_listings_payload(db)
     digest_payload = _build_digest_payload(db)
 
-    _write_json(public / "data.json", listings_payload)
-    _write_json(public / "daily-digest.json", digest_payload)
+    _write_json(data_dir / "data.json", listings_payload)
+    _write_json(data_dir / "daily-digest.json", digest_payload)
 
     summary = {
         "ok": True,
         "listings": listings_payload["stats"]["totalListings"],
         "deals": listings_payload["stats"]["totalDeals"],
         "neighborhoods": len(listings_payload["neighborhoods"]),
-        "wrote": ["public/data.json", "public/daily-digest.json"],
+        "wrote": ["data/dashboard/data.json", "data/dashboard/daily-digest.json"],
         "pushed": False,
     }
     logger.info(
