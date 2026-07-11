@@ -104,10 +104,16 @@ class ListingRepository:
         return query.all()
     
     def mark_inactive(self, source: str, active_ids: List[str]) -> int:
-        """Mark listings as inactive if not in active_ids."""
+        """Mark currently-active listings as inactive if not in active_ids.
+
+        Only touches rows that are still active (TIN-448) — repeat sweeps must
+        not churn already-inactive rows, and the returned count then means
+        "newly deactivated this run".
+        """
         result = self.db.query(Listing).filter(
             and_(
                 Listing.source == source,
+                Listing.is_active == True,
                 ~Listing.source_id.in_(active_ids)
             )
         ).update({"is_active": False}, synchronize_session=False)

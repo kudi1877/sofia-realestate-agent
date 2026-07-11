@@ -71,7 +71,11 @@ class Listing(Base):
     
     # Metadata
     first_seen = Column(DateTime, default=func.now())
-    last_seen = Column(DateTime, default=func.now(), onupdate=func.now())
+    # NO onupdate here (TIN-448): the column-level onupdate fired on the
+    # nightly mark_inactive bulk UPDATE too, stamping ~26k dead rows "seen
+    # today" so the 30-day soft-deprecation never expired anything. upsert()
+    # sets last_seen explicitly on every real re-scrape — the only writer.
+    last_seen = Column(DateTime, default=func.now())
     is_active = Column(Boolean, default=True)
     
     # Relationships
