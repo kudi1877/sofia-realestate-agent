@@ -175,24 +175,34 @@ def _build_digest_payload(db: Session) -> Dict[str, Any]:
         from src.alerts.daily_email import generate_daily_email  # heavy import
     except Exception as e:
         logger.warning(f"Could not import daily_email for digest: {e}")
-        return _empty_digest()
+        generate_daily_email = None
 
-    try:
-        _html, _plain, ctx = generate_daily_email()
-    except Exception as e:
-        logger.warning(f"Daily digest render failed, falling back to empty: {e}")
-        return _empty_digest()
+    ctx = {}
+    if generate_daily_email is not None:
+        try:
+            _html, _plain, ctx = generate_daily_email()
+        except Exception as e:
+            logger.warning(f"Daily digest render failed, using database fallbacks: {e}")
+
+    from src.analysis.trends import detect_price_drops, generate_market_summary
+
+    market_summary = generate_market_summary(db)
+    price_drops = [
+        _dashboard_price_drop(drop)
+        for drop in detect_price_drops(db)[:8]
+    ]
 
     return {
         "generated_at": utc_now().isoformat(),
         "summary": {
-            "total_active":  int(ctx.get("total_active", 0) or 0),
+            "total_active":  int(market_summary["total_listings"]),
+            "off_market":    int(market_summary["off_market"]),
             "new_today":     int(ctx.get("new_today", 0) or 0),
-            "price_drops":   int(ctx.get("price_drops_count", 0) or 0),
+            "price_drops":   len(price_drops),
             "hot_deals":     len(ctx.get("new_deals", []) or []),
         },
         "new_deals":     [_dashboard_deal(d) for d in (ctx.get("new_deals") or [])],
-        "price_drops":   [_dashboard_drop(d) for d in (ctx.get("price_drops") or [])],
+        "price_drops":   price_drops,
         "hot_districts": [_dashboard_district(h) for h in (ctx.get("hot_districts") or [])],
         "top_pick":      _dashboard_deal(ctx.get("top_pick")) if ctx.get("top_pick") else None,
     }
@@ -201,7 +211,7 @@ def _build_digest_payload(db: Session) -> Dict[str, Any]:
 def _empty_digest() -> Dict[str, Any]:
     return {
         "generated_at": utc_now().isoformat(),
-        "summary": {"total_active": 0, "new_today": 0, "price_drops": 0, "hot_deals": 0},
+        "summary": {"total_active": 0, "off_market": 0, "new_today": 0, "price_drops": 0, "hot_deals": 0},
         "new_deals": [], "price_drops": [], "hot_districts": [], "top_pick": None,
     }
 
@@ -246,9 +256,31 @@ def _dashboard_drop(d: Dict[str, Any]) -> Dict[str, Any]:
     base = _dashboard_deal(d)
     base.update({
         "old_price":      _to_num(d.get("old_price") or d.get("first_price_eur")),
+        "new_price":      _to_num(d.get("new_price") or d.get("price_eur")),
         "price_drop_pct": _to_num(d.get("price_drop_pct") or d.get("drop_pct")),
     })
     return base
+
+
+def _dashboard_price_drop(drop: Dict[str, Any]) -> Dict[str, Any]:
+    listing = drop["listing"]
+    return _dashboard_drop(
+        {
+            "id": listing.id,
+            "source": listing.source,
+            "url": listing.url,
+            "title": listing.title or listing.neighborhood,
+            "neighborhood": listing.neighborhood,
+            "property_type": listing.property_type,
+            "rooms": listing.rooms,
+            "area_sqm": listing.area_sqm,
+            "price_eur": drop["current_price"],
+            "price_per_sqm_eur": listing.price_per_sqm_eur,
+            "old_price": drop["original_price"],
+            "new_price": drop["current_price"],
+            "drop_pct": drop["drop_pct"],
+        }
+    )
 
 
 def _dashboard_district(h: Dict[str, Any]) -> Dict[str, Any]:

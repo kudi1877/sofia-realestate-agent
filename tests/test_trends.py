@@ -35,11 +35,15 @@ def listing(source_id: str, price_per_sqm: float, *, duplicate=False, neighborho
 
 def test_trends_and_market_summary_exclude_duplicates_and_publish_median():
     db = session()
+    off_market = listing("off-market", 1700)
+    off_market.is_active = False
+    off_market.is_sold = True
     db.add_all(
         [
             listing("low", 1000),
             listing("high", 3000),
             listing("duplicate", 9000, duplicate=True),
+            off_market,
             NeighborhoodStatsHistory(
                 neighborhood="Люлин",
                 snapshot_date=utc_now() - timedelta(days=31),
@@ -62,6 +66,7 @@ def test_trends_and_market_summary_exclude_duplicates_and_publish_median():
     assert summary["price_per_sqm"] == 2000
     assert summary["median_price_per_sqm"] == 2000
     assert summary["avg_price_per_sqm"] == 2000
+    assert summary["off_market"] == 1
 
 
 def test_update_neighborhood_stats_writes_one_snapshot_per_neighborhood():

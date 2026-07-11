@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.config import PRICE_DROP_PCT_THRESHOLD
 from src.database.models import (
     Listing,
     Neighborhood,
@@ -110,34 +111,35 @@ def get_price_history(db: Session, listing_id: int) -> List[Dict[str, Any]]:
 
 
 def detect_price_drops(db: Session, days: int = 7) -> List[Dict[str, Any]]:
-    """Detect listings with recent price drops."""
+    """Detect recent drops from the latest recorded old price to current price."""
     cutoff_date = utc_now() - timedelta(days=days)
     history = db.query(PriceHistory, Listing).join(Listing).filter(
-        PriceHistory.recorded_at >= cutoff_date
+        PriceHistory.recorded_at >= cutoff_date,
+        Listing.is_active.is_(True),
+        _is_unique_listing_clause(),
+    ).order_by(
+        PriceHistory.listing_id,
+        PriceHistory.recorded_at.desc(),
+        PriceHistory.id.desc(),
     ).all()
 
-    by_listing = defaultdict(list)
+    latest_by_listing = {}
     for price_history, listing in history:
-        by_listing[listing.id].append((price_history, listing))
+        latest_by_listing.setdefault(listing.id, (price_history, listing))
 
     drops = []
-    for entries in by_listing.values():
-        if len(entries) < 2:
-            continue
-
-        entries.sort(key=lambda item: item[0].recorded_at)
-        first_price = entries[0][0].price_eur
-        last_price = entries[-1][0].price_eur
-
-        if last_price < first_price:
-            drop_pct = ((first_price - last_price) / first_price) * 100
-            if drop_pct >= 5:
+    for price_history, listing in latest_by_listing.values():
+        old_price = float(price_history.price_eur)
+        new_price = float(listing.price_eur)
+        if old_price > 0 and new_price < old_price:
+            drop_pct = ((old_price - new_price) / old_price) * 100
+            if drop_pct >= PRICE_DROP_PCT_THRESHOLD:
                 drops.append(
                     {
-                        "listing": entries[-1][1],
-                        "original_price": first_price,
-                        "current_price": last_price,
-                        "drop_eur": first_price - last_price,
+                        "listing": listing,
+                        "original_price": old_price,
+                        "current_price": new_price,
+                        "drop_eur": old_price - new_price,
                         "drop_pct": round(drop_pct, 2),
                     }
                 )
@@ -185,8 +187,14 @@ def generate_market_summary(db: Session) -> Dict[str, Any]:
         if zone:
             prices_by_zone[zone].append(float(price_per_sqm))
 
+    off_market = db.query(Listing).filter(
+        Listing.is_sold.is_(True),
+        _is_unique_listing_clause(),
+    ).count()
+
     return {
         "total_listings": len(rows),
+        "off_market": off_market,
         "price_per_sqm": overall["median"],
         "median_price_per_sqm": overall["median"],
         "avg_price_per_sqm": overall["mean"],

@@ -21,7 +21,7 @@ from src.scrapers.propertybg import PropertyBGScraper
 from src.analysis.anomaly import analyze_database, calculate_neighborhood_stats
 from src.analysis.trends import calculate_neighborhood_trends, generate_market_summary
 from src.alerts.telegram import should_send_alert
-from src.config import MARK_INACTIVE_MIN_RATIO
+from src.config import MARK_INACTIVE_MIN_RATIO, SOLD_AFTER_DAYS
 from src.utils.deduplication import deduplicate_listings, get_duplicate_stats
 
 
@@ -157,6 +157,18 @@ def cmd_scrape(recorder=None):
         if ids:
             marked = repo.mark_inactive(source, ids)
             logger.info(f"Marked {marked} {source} listings as inactive")
+
+    newly_off_market = repo.mark_stale_inactive_as_sold(SOLD_AFTER_DAYS)
+    off_market_count = repo.count_off_market()
+    logger.info(
+        f"Marked {newly_off_market} listings off market after {SOLD_AFTER_DAYS} days; "
+        f"{off_market_count} off market in total"
+    )
+    if recorder is not None:
+        recorder.set_off_market(
+            total=off_market_count,
+            newly_marked=newly_off_market,
+        )
     
     # Update neighborhood stats
     update_neighborhood_stats(db)

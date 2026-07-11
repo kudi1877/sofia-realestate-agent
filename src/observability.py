@@ -82,6 +82,8 @@ class RunRecorder:
 
     _start_ts: float = field(default=0.0, repr=False)
     _step_start: Dict[str, float] = field(default_factory=dict, repr=False)
+    _off_market: int = field(default=0, repr=False)
+    _newly_off_market: int = field(default=0, repr=False)
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -122,6 +124,10 @@ class RunRecorder:
         if self.status not in ("error",):
             self.status = "partial"
 
+    def set_off_market(self, *, total: int, newly_marked: int = 0) -> None:
+        self._off_market = total
+        self._newly_off_market = newly_marked
+
     def finalize(self, *, active_after: int, scraped_total: Optional[int] = None) -> None:
         self.finished_at = _utc_now_iso()
         self.duration_sec = round(time.time() - self._start_ts, 1)
@@ -130,6 +136,8 @@ class RunRecorder:
             if scraped_total is not None
             else sum(s.scraped for s in self.sources),
             "active_after": active_after,
+            "off_market": self._off_market,
+            "newly_off_market": self._newly_off_market,
         }
         # Decide overall status
         if self.errors and not self.sources:

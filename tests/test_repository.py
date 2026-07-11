@@ -1,8 +1,11 @@
+from datetime import timedelta
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.database.models import Base
 from src.database.repository import ListingRepository
+from src.utils.time import utc_now
 
 
 def listing_data(**overrides):
@@ -75,3 +78,32 @@ def test_upsert_commit_false_preserves_price_history_rows():
 
     history = repo.get_price_history(created.id)
     assert [row.price_eur for row in history] == [100000, 100000]
+
+
+def test_mark_stale_inactive_as_sold_respects_age_and_active_thresholds():
+    db = session()
+    repo = ListingRepository(db)
+    now = utc_now()
+
+    stale = repo.upsert(listing_data(source_id="stale"))
+    stale.is_active = False
+    stale.first_seen = now - timedelta(days=30)
+    stale.last_seen = now - timedelta(days=15)
+
+    recent = repo.upsert(listing_data(source_id="recent"))
+    recent.is_active = False
+    recent.last_seen = now - timedelta(days=13)
+
+    active = repo.upsert(listing_data(source_id="active"))
+    active.last_seen = now - timedelta(days=30)
+    db.commit()
+
+    marked = repo.mark_stale_inactive_as_sold(days=14)
+
+    assert marked == 1
+    assert stale.is_sold is True
+    assert stale.sold_date is not None
+    assert stale.days_on_market == 30
+    assert recent.is_sold is False
+    assert active.is_sold is False
+    assert repo.count_off_market() == 1

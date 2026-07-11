@@ -35,6 +35,12 @@ class FakeRepo:
     def count_active_by_source(self, source):
         return self.active_counts.get(source, 0)
 
+    def mark_stale_inactive_as_sold(self, days):
+        return 0
+
+    def count_off_market(self):
+        return 0
+
 
 class FakeScraper:
     def __init__(self, rows):

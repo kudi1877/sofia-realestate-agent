@@ -3,8 +3,9 @@ from datetime import datetime
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from src.database.models import Alert, Base, Listing
-from src.exporters.dashboard import _build_listings_payload, _write_json
+from src.database.models import Alert, Base, Listing, PriceHistory
+from src.exporters.dashboard import _build_digest_payload, _build_listings_payload, _write_json
+from src.utils.time import utc_now
 
 
 def session():
@@ -108,3 +109,54 @@ def test_write_json_uses_compact_separators(tmp_path):
     _write_json(path, {"listings": [{"id": 1, "source": "test"}]})
 
     assert path.read_text(encoding="utf-8") == '{"listings":[{"id":1,"source":"test"}]}'
+
+
+def test_digest_exports_recent_price_drop_with_old_and_new_prices(monkeypatch):
+    _engine, db = session()
+    row = listing("price-drop")
+    row.price_eur = 90000
+    row.price_per_sqm_eur = 1800
+    row.first_price_eur = 100000
+    row.price_changes = 1
+    db.add(row)
+    db.flush()
+    db.add(
+        PriceHistory(
+            listing_id=row.id,
+            price_eur=100000,
+            price_per_sqm_eur=2000,
+            recorded_at=utc_now(),
+        )
+    )
+    db.commit()
+
+    from src.alerts import daily_email
+
+    monkeypatch.setattr(
+        daily_email,
+        "generate_daily_email",
+        lambda: ("", "", {"new_deals": [], "hot_districts": []}),
+    )
+
+    payload = _build_digest_payload(db)
+
+    assert payload["summary"]["price_drops"] == 1
+    assert payload["price_drops"] == [
+        {
+            "id": row.id,
+            "source": "test",
+            "url": "https://example.test/price-drop",
+            "title": "Export listing",
+            "price_eur": 90000.0,
+            "area_sqm": 50.0,
+            "price_per_sqm_eur": 1800.0,
+            "neighborhood": "Люлин",
+            "property_type": "apartment",
+            "rooms": 2.0,
+            "zscore": None,
+            "savings_pct": None,
+            "old_price": 100000.0,
+            "new_price": 90000.0,
+            "price_drop_pct": 10.0,
+        }
+    ]

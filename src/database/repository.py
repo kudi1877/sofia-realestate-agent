@@ -160,17 +160,47 @@ class ListingRepository:
         
         return sorted(drops, key=lambda l: (l.first_price_eur - l.price_eur) / l.first_price_eur if l.first_price_eur else 0, reverse=True)
     
-    def mark_sold(self, source: str, source_id: str):
+    @staticmethod
+    def _apply_sold_state(listing: Listing, sold_at) -> None:
+        listing.is_sold = True
+        listing.sold_date = sold_at
+        listing.is_active = False
+        if listing.first_seen:
+            listing.days_on_market = max(0, (sold_at - listing.first_seen).days)
+
+    def mark_sold(self, source: str, source_id: str, commit: bool = True) -> bool:
         """Mark a listing as sold."""
         listing = self.get_by_source_id(source, source_id)
-        if listing:
-            listing.is_sold = True
-            now = utc_now()
-            listing.sold_date = now
-            listing.is_active = False
-            if listing.first_seen:
-                listing.days_on_market = (now - listing.first_seen).days
+        if not listing:
+            return False
+
+        self._apply_sold_state(listing, utc_now())
+        if commit:
             self.db.commit()
+        return True
+
+    def mark_stale_inactive_as_sold(self, days: int) -> int:
+        """Mark inactive listings unseen for longer than ``days`` off market."""
+        now = utc_now()
+        cutoff = now - timedelta(days=days)
+        stale = self.db.query(Listing).filter(
+            Listing.is_active.is_(False),
+            (Listing.is_sold.is_(False)) | (Listing.is_sold.is_(None)),
+            Listing.last_seen.isnot(None),
+            Listing.last_seen < cutoff,
+        ).all()
+
+        for listing in stale:
+            self._apply_sold_state(listing, now)
+        self.db.commit()
+        return len(stale)
+
+    def count_off_market(self) -> int:
+        """Count unique listings inferred to have left the market."""
+        return self.db.query(func.count(Listing.id)).filter(
+            Listing.is_sold.is_(True),
+            (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)),
+        ).scalar() or 0
     
     def get_sold(self, days: int = 30) -> List[Listing]:
         """Get recently sold listings."""
