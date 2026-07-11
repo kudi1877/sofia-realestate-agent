@@ -177,17 +177,33 @@ def update_neighborhood_stats(db):
     unique_listings = [l for l in listings if not getattr(l, 'is_duplicate', False)]
     
     stats = calculate_neighborhood_stats(unique_listings)
-    
-    for key, group_stats in stats.items():
-        neighborhood = key[0]
+
+    published_stats = select_published_neighborhood_stats(stats)
+    for neighborhood, group_stats in published_stats.items():
         hood_repo.update_stats(
             name=neighborhood,
             avg_price=group_stats['mean'],
             median_price=group_stats['median'],
             count=group_stats['count'],
         )
-    
-    logger.info(f"Updated stats for {len(stats)} neighborhood groups")
+
+    logger.info(f"Updated published stats for {len(published_stats)} neighborhoods")
+
+
+def select_published_neighborhood_stats(stats):
+    """Select one stable tier per neighborhood for persisted user-facing stats."""
+    neighborhoods = {key[0] for key in stats}
+    selected = {}
+
+    for neighborhood in neighborhoods:
+        apartment_key = (neighborhood, 'apartment', 'all')
+        fallback_key = (neighborhood, 'all', 'all')
+        if apartment_key in stats:
+            selected[neighborhood] = stats[apartment_key]
+        elif fallback_key in stats:
+            selected[neighborhood] = stats[fallback_key]
+
+    return selected
 
 
 def cmd_analyze():
