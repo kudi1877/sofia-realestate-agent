@@ -249,6 +249,21 @@ def cmd_alerts():
     """
     from src.alerts.telegram import format_telegram_digest
     from src.message_sender import send_simple_message
+    from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+    # Skip cleanly when Telegram isn't configured (TIN-447). Alerts stay
+    # unsent so they retry once credentials are provided; the pipeline
+    # continues to the dashboard export either way.
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.warning(
+            "Telegram not configured (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID empty) "
+            "— skipping digest; alerts left unsent"
+        )
+        return {
+            'sent': 0, 'qualified': 0, 'considered': 0,
+            'top_deals': [], 'by_neighborhood': [],
+            'skipped': 'telegram_not_configured',
+        }
 
     logger.info("Building digest from new alerts...")
 
@@ -504,9 +519,16 @@ def cmd_full():
             anomalies = cmd_analyze()
         rec.set_analysis(anomalies=anomalies, neighborhoods=0, groups_used=0)
 
-        # Step 3: Alerts (Telegram digest — single message per run)
-        with rec.step("alerts"):
-            alerts_summary = cmd_alerts() or {}
+        # Step 3: Alerts (Telegram digest — single message per run).
+        # Non-fatal by design (TIN-447): a broken/unconfigured Telegram must
+        # never block the dashboard export that follows.
+        try:
+            with rec.step("alerts"):
+                alerts_summary = cmd_alerts() or {}
+        except Exception as e:
+            logger.error(f"Alerts step failed (continuing to export): {e}")
+            rec.add_error(f"alerts: {str(e)[:200]}")
+            alerts_summary = {}
         rec.set_digest(
             sent=alerts_summary.get('sent', 0),
             qualified=alerts_summary.get('qualified', 0),

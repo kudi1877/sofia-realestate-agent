@@ -38,8 +38,15 @@ def _send_message(
 
     Returns True on success, False on permanent failure. Logs at WARN/ERROR.
     """
+    # Degrade gracefully when unconfigured — the nightly pipeline must never
+    # crash on a missing Telegram setup (TIN-447: a raise here blocked the
+    # dashboard export step for days). Callers treat False as "not sent".
     if not chat_id:
-        raise ValueError("TELEGRAM_CHAT_ID must be set to send Telegram messages")
+        logger.error(
+            "TELEGRAM_CHAT_ID not set — cannot send message. "
+            "Export it in ~/.zshrc or .env (see .env.example)."
+        )
+        return False
 
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
