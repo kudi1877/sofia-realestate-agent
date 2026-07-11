@@ -135,6 +135,27 @@ class Neighborhood(Base):
         return f"<Neighborhood({self.name} €{self.avg_price_per_sqm or 0:.0f}/m²)>"
 
 
+class NeighborhoodStatsHistory(Base):
+    """Per-run neighborhood price snapshot used for like-for-like trends."""
+
+    __tablename__ = "neighborhood_stats_history"
+
+    id = Column(Integer, primary_key=True)
+    neighborhood = Column(String(100), nullable=False)
+    snapshot_date = Column(DateTime, nullable=False, default=func.now())
+    median_price_per_sqm = Column(Float, nullable=False)
+    mean_price_per_sqm = Column(Float, nullable=False)
+    listing_count = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "idx_neighborhood_stats_history_lookup",
+            "neighborhood",
+            "snapshot_date",
+        ),
+    )
+
+
 class Alert(Base):
     """Alert tracking for deals."""
     
@@ -175,6 +196,8 @@ def init_db():
     """
     from sqlalchemy import inspect, text
 
+    # create_all is also the idempotent additive migration for new tables such
+    # as neighborhood_stats_history; column additions are handled below.
     Base.metadata.create_all(bind=engine)
 
     # Idempotent column additions for older DBs.

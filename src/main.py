@@ -7,7 +7,12 @@ from typing import Any, Dict, List
 from loguru import logger
 
 from src.database.models import init_db, get_db
-from src.database.repository import ListingRepository, AlertRepository, NeighborhoodRepository
+from src.database.repository import (
+    AlertRepository,
+    ListingRepository,
+    NeighborhoodRepository,
+    NeighborhoodStatsHistoryRepository,
+)
 from src.scrapers.imotbg import ImotBgScraper
 from src.scrapers.homesbg import HomesBgScraper
 from src.scrapers.imotiinfo import ImotiInfoScraper
@@ -171,6 +176,7 @@ def update_neighborhood_stats(db):
     
     repo = ListingRepository(db)
     hood_repo = NeighborhoodRepository(db)
+    history_repo = NeighborhoodStatsHistoryRepository(db)
     
     # Get only unique (non-duplicate) active listings for stats
     listings = repo.get_active()
@@ -186,6 +192,8 @@ def update_neighborhood_stats(db):
             median_price=group_stats['median'],
             count=group_stats['count'],
         )
+
+    history_repo.record_snapshot(published_stats)
 
     logger.info(f"Updated published stats for {len(published_stats)} neighborhoods")
 

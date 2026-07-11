@@ -1,73 +1,95 @@
 """Trend analysis for neighborhood prices."""
 
-from typing import List, Dict, Any, Optional
-from datetime import timedelta
 from collections import defaultdict
+from datetime import timedelta
+from statistics import fmean, median
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from loguru import logger
 
-from src.database.models import Listing, PriceHistory, Neighborhood
+from src.database.models import (
+    Listing,
+    Neighborhood,
+    NeighborhoodStatsHistory,
+    PriceHistory,
+)
 from src.utils.time import utc_now
 
 
-def calculate_neighborhood_trends(db: Session, days: int = 30) -> Dict[str, Any]:
-    """Calculate price trends per neighborhood over time."""
-    
-    # Get current prices by neighborhood
-    cutoff_date = utc_now() - timedelta(days=days)
-    
-    # Query active listings by neighborhood
-    results = db.query(
+def _is_unique_listing_clause():
+    return (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None))
+
+
+def _active_unique_prices(db: Session):
+    return db.query(
         Listing.neighborhood,
-        func.avg(Listing.price_per_sqm_eur).label('avg_price'),
-        func.count(Listing.id).label('count')
+        Listing.property_type,
+        Listing.price_per_sqm_eur,
     ).filter(
-        Listing.is_active == True
-    ).group_by(Listing.neighborhood).all()
-    
-    trends = {}
-    for neighborhood, avg_price, count in results:
-        trends[neighborhood] = {
-            'current_avg': float(avg_price),
-            'listing_count': count,
-            'trend': 'stable',
-        }
-    
-    # Compare with historical data
-    historical = db.query(
-        PriceHistory,
-        Listing.neighborhood
-    ).join(Listing).filter(
-        PriceHistory.recorded_at < cutoff_date
+        Listing.is_active.is_(True),
+        _is_unique_listing_clause(),
+        Listing.price_per_sqm_eur > 0,
     ).all()
-    
-    # Group historical by neighborhood
-    hist_by_neighborhood = defaultdict(list)
-    for ph, neighborhood in historical:
-        hist_by_neighborhood[neighborhood].append(ph.price_per_sqm_eur)
-    
-    # Calculate trends
+
+
+def calculate_neighborhood_trends(db: Session, days: int = 30) -> Dict[str, Any]:
+    """Compare today's active-listing median with a same-metric snapshot."""
+    prices_by_neighborhood = defaultdict(list)
+    for neighborhood, _property_type, price_per_sqm in _active_unique_prices(db):
+        prices_by_neighborhood[neighborhood].append(float(price_per_sqm))
+
+    trends = {}
+    for neighborhood, prices in prices_by_neighborhood.items():
+        current_median = float(median(prices))
+        current_mean = float(fmean(prices))
+        trends[neighborhood] = {
+            "current_price_per_sqm": current_median,
+            "current_median": current_median,
+            "current_mean": current_mean,
+            "current_avg": current_mean,
+            "listing_count": len(prices),
+            "trend": "insufficient history",
+        }
+
+    cutoff_date = utc_now() - timedelta(days=days)
+    historical_rows = db.query(NeighborhoodStatsHistory).filter(
+        NeighborhoodStatsHistory.snapshot_date <= cutoff_date
+    ).order_by(
+        NeighborhoodStatsHistory.neighborhood,
+        NeighborhoodStatsHistory.snapshot_date.desc(),
+    ).all()
+
+    previous_by_neighborhood = {}
+    for snapshot in historical_rows:
+        previous_by_neighborhood.setdefault(snapshot.neighborhood, snapshot)
+
     for neighborhood, current_data in trends.items():
-        if neighborhood in hist_by_neighborhood:
-            hist_prices = hist_by_neighborhood[neighborhood]
-            if hist_prices:
-                hist_avg = sum(hist_prices) / len(hist_prices)
-                current_avg = current_data['current_avg']
-                
-                pct_change = ((current_avg - hist_avg) / hist_avg) * 100
-                
-                if pct_change > 5:
-                    current_data['trend'] = 'up'
-                elif pct_change < -5:
-                    current_data['trend'] = 'down'
-                else:
-                    current_data['trend'] = 'stable'
-                
-                current_data['pct_change_30d'] = round(pct_change, 2)
-                current_data['previous_avg'] = round(hist_avg, 2)
-    
+        snapshot = previous_by_neighborhood.get(neighborhood)
+        if snapshot is None or snapshot.median_price_per_sqm <= 0:
+            continue
+
+        previous_median = float(snapshot.median_price_per_sqm)
+        pct_change = (
+            (current_data["current_median"] - previous_median)
+            / previous_median
+            * 100
+        )
+        if pct_change > 5:
+            direction = "up"
+        elif pct_change < -5:
+            direction = "down"
+        else:
+            direction = "stable"
+
+        current_data.update(
+            {
+                "trend": direction,
+                "pct_change_30d": round(pct_change, 2),
+                "previous_median": round(previous_median, 2),
+                "previous_snapshot_date": snapshot.snapshot_date.isoformat(),
+            }
+        )
+
     return trends
 
 
@@ -76,97 +98,102 @@ def get_price_history(db: Session, listing_id: int) -> List[Dict[str, Any]]:
     history = db.query(PriceHistory).filter(
         PriceHistory.listing_id == listing_id
     ).order_by(PriceHistory.recorded_at).all()
-    
+
     return [
         {
-            'price_eur': h.price_eur,
-            'price_per_sqm_eur': h.price_per_sqm_eur,
-            'recorded_at': h.recorded_at.isoformat(),
+            "price_eur": row.price_eur,
+            "price_per_sqm_eur": row.price_per_sqm_eur,
+            "recorded_at": row.recorded_at.isoformat(),
         }
-        for h in history
+        for row in history
     ]
 
 
 def detect_price_drops(db: Session, days: int = 7) -> List[Dict[str, Any]]:
     """Detect listings with recent price drops."""
     cutoff_date = utc_now() - timedelta(days=days)
-    
-    # Get all price history entries in the period
     history = db.query(PriceHistory, Listing).join(Listing).filter(
         PriceHistory.recorded_at >= cutoff_date
     ).all()
-    
-    # Group by listing
+
     by_listing = defaultdict(list)
-    for ph, listing in history:
-        by_listing[listing.id].append((ph, listing))
-    
+    for price_history, listing in history:
+        by_listing[listing.id].append((price_history, listing))
+
     drops = []
-    for listing_id, entries in by_listing.items():
+    for entries in by_listing.values():
         if len(entries) < 2:
             continue
-        
-        # Sort by date
-        entries.sort(key=lambda x: x[0].recorded_at)
-        
+
+        entries.sort(key=lambda item: item[0].recorded_at)
         first_price = entries[0][0].price_eur
         last_price = entries[-1][0].price_eur
-        
+
         if last_price < first_price:
             drop_pct = ((first_price - last_price) / first_price) * 100
-            if drop_pct >= 5:  # At least 5% drop
-                drops.append({
-                    'listing': entries[-1][1],
-                    'original_price': first_price,
-                    'current_price': last_price,
-                    'drop_eur': first_price - last_price,
-                    'drop_pct': round(drop_pct, 2),
-                })
-    
-    # Sort by drop percentage
-    drops.sort(key=lambda x: x['drop_pct'], reverse=True)
+            if drop_pct >= 5:
+                drops.append(
+                    {
+                        "listing": entries[-1][1],
+                        "original_price": first_price,
+                        "current_price": last_price,
+                        "drop_eur": first_price - last_price,
+                        "drop_pct": round(drop_pct, 2),
+                    }
+                )
+
+    drops.sort(key=lambda item: item["drop_pct"], reverse=True)
     return drops
 
 
-def generate_market_summary(db: Session) -> Dict[str, Any]:
-    """Generate market summary statistics."""
-    
-    # Total listings
-    total = db.query(Listing).filter(Listing.is_active == True).count()
-    
-    # Average price per sqm
-    avg_price = db.query(func.avg(Listing.price_per_sqm_eur)).filter(
-        Listing.is_active == True
-    ).scalar()
-    
-    # By property type
-    by_type = db.query(
-        Listing.property_type,
-        func.avg(Listing.price_per_sqm_eur),
-        func.count(Listing.id)
-    ).filter(Listing.is_active == True).group_by(Listing.property_type).all()
-    
-    # By zone (if neighborhoods have zones assigned)
-    neighborhoods = db.query(Neighborhood).all()
-    zone_stats = defaultdict(lambda: {'count': 0, 'total_price': 0})
-    
-    for n in neighborhoods:
-        if n.avg_price_per_sqm and n.zone:
-            zone_stats[n.zone]['count'] += n.listing_count
-            zone_stats[n.zone]['total_price'] += n.avg_price_per_sqm * n.listing_count
-    
-    zone_averages = {}
-    for zone, data in zone_stats.items():
-        if data['count'] > 0:
-            zone_averages[zone] = round(data['total_price'] / data['count'], 2)
-    
+def _summarize_prices(prices: List[float]) -> Dict[str, float]:
+    if not prices:
+        return {"median": 0, "mean": 0}
     return {
-        'total_listings': total,
-        'avg_price_per_sqm': round(avg_price, 2) if avg_price else 0,
-        'by_property_type': {
-            pt: {'avg_price': round(avg, 2), 'count': count}
-            for pt, avg, count in by_type
+        "median": round(float(median(prices)), 2),
+        "mean": round(float(fmean(prices)), 2),
+    }
+
+
+def generate_market_summary(db: Session) -> Dict[str, Any]:
+    """Generate deduplicated, median-first market summary statistics."""
+    rows = _active_unique_prices(db)
+    all_prices = [float(row.price_per_sqm_eur) for row in rows]
+    overall = _summarize_prices(all_prices)
+
+    prices_by_type = defaultdict(list)
+    for _neighborhood, property_type, price_per_sqm in rows:
+        prices_by_type[property_type].append(float(price_per_sqm))
+
+    by_property_type = {}
+    for property_type, prices in prices_by_type.items():
+        summary = _summarize_prices(prices)
+        by_property_type[property_type] = {
+            "price_per_sqm": summary["median"],
+            "median_price": summary["median"],
+            "avg_price": summary["mean"],
+            "count": len(prices),
+        }
+
+    zone_by_neighborhood = {
+        row.name: row.zone
+        for row in db.query(Neighborhood).filter(Neighborhood.zone.isnot(None)).all()
+    }
+    prices_by_zone = defaultdict(list)
+    for neighborhood, _property_type, price_per_sqm in rows:
+        zone = zone_by_neighborhood.get(neighborhood)
+        if zone:
+            prices_by_zone[zone].append(float(price_per_sqm))
+
+    return {
+        "total_listings": len(rows),
+        "price_per_sqm": overall["median"],
+        "median_price_per_sqm": overall["median"],
+        "avg_price_per_sqm": overall["mean"],
+        "by_property_type": by_property_type,
+        "by_zone": {
+            zone: _summarize_prices(prices)["median"]
+            for zone, prices in prices_by_zone.items()
         },
-        'by_zone': zone_averages,
-        'generated_at': utc_now().isoformat(),
+        "generated_at": utc_now().isoformat(),
     }

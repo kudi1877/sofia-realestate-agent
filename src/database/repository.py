@@ -5,7 +5,13 @@ from datetime import timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_, desc
 
-from src.database.models import Listing, PriceHistory, Neighborhood, Alert
+from src.database.models import (
+    Alert,
+    Listing,
+    Neighborhood,
+    NeighborhoodStatsHistory,
+    PriceHistory,
+)
 from src.utils.time import utc_now
 
 
@@ -243,6 +249,34 @@ class NeighborhoodRepository:
     def get_all(self) -> List[Neighborhood]:
         """Get all neighborhoods."""
         return self.db.query(Neighborhood).all()
+
+
+class NeighborhoodStatsHistoryRepository:
+    """Repository for per-run neighborhood statistics snapshots."""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def record_snapshot(
+        self,
+        stats: Dict[str, Dict[str, float]],
+        snapshot_date=None,
+    ) -> List[NeighborhoodStatsHistory]:
+        """Write exactly one row per published neighborhood for this run."""
+        recorded_at = snapshot_date or utc_now()
+        rows = [
+            NeighborhoodStatsHistory(
+                neighborhood=neighborhood,
+                snapshot_date=recorded_at,
+                median_price_per_sqm=group_stats["median"],
+                mean_price_per_sqm=group_stats["mean"],
+                listing_count=group_stats["count"],
+            )
+            for neighborhood, group_stats in stats.items()
+        ]
+        self.db.add_all(rows)
+        self.db.commit()
+        return rows
 
 
 class AlertRepository:
