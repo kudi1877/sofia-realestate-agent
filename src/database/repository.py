@@ -146,6 +146,7 @@ class ListingRepository:
         listings = self.db.query(Listing).filter(
             and_(
                 Listing.is_active == True,
+                or_(Listing.is_duplicate.is_(False), Listing.is_duplicate.is_(None)),
                 Listing.first_price_eur.isnot(None),
                 Listing.price_changes > 0,
             )

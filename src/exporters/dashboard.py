@@ -180,7 +180,7 @@ def _build_digest_payload(db: Session) -> Dict[str, Any]:
     ctx = {}
     if generate_daily_email is not None:
         try:
-            _html, _plain, ctx = generate_daily_email()
+            _html, _plain, ctx = generate_daily_email(db=db)
         except Exception as e:
             logger.warning(f"Daily digest render failed, using database fallbacks: {e}")
 

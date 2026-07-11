@@ -8,14 +8,19 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
 from jinja2 import Environment, FileSystemLoader
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import ANOMALY_ZSCORE_THRESHOLD, DASHBOARD_DATA_DIR, PRICE_DROP_PCT_THRESHOLD
+from src.database.models import Alert, Listing, get_db
+from src.database.repository import ListingRepository
 from src.utils.time import utc_now
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
@@ -47,144 +52,145 @@ def _construction_text(ct: str | None) -> str:
 
 # ─── Database queries ─────────────────────────────────────────────────────────
 
-def _connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def _unique_listing_clause():
+    return (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None))
 
 
-def _query_new_deals(conn: sqlite3.Connection, hours: int = 24) -> List[Dict[str, Any]]:
-    """Listings with configured underpriced Z-score first seen in the last N hours."""
-    cutoff = (utc_now() - timedelta(hours=hours)).isoformat()
-    rows = conn.execute("""
-        SELECT l.*, 
-               (SELECT AVG(l2.price_per_sqm_eur) 
-                FROM listings l2 
-                WHERE l2.neighborhood = l.neighborhood 
-                  AND l2.property_type = l.property_type
-                  AND l2.is_active = 1) as group_avg
-        FROM listings l
-        LEFT JOIN alerts a ON a.listing_id = l.id AND a.alert_type = 'underpriced'
-        WHERE l.is_active = 1
-          AND l.first_seen >= ?
-          AND (a.zscore IS NOT NULL AND a.zscore < ?)
-        ORDER BY a.zscore ASC
-        LIMIT 10
-    """, (cutoff, ANOMALY_ZSCORE_THRESHOLD)).fetchall()
+def _group_medians(db: Session) -> Dict[tuple[str, str], float]:
+    grouped = defaultdict(list)
+    rows = db.query(
+        Listing.neighborhood,
+        Listing.property_type,
+        Listing.price_per_sqm_eur,
+    ).filter(
+        Listing.is_active.is_(True),
+        _unique_listing_clause(),
+        Listing.price_per_sqm_eur > 0,
+    ).all()
+    for neighborhood, property_type, price_per_sqm in rows:
+        grouped[(neighborhood, property_type)].append(float(price_per_sqm))
+    return {key: float(median(prices)) for key, prices in grouped.items()}
 
-    # If no alert-based results, fall back to z-score column in data.json export
+
+def _deal_payload(listing: Listing, group_price: float) -> Dict[str, Any]:
+    price_per_sqm = float(listing.price_per_sqm_eur or 0)
+    savings_eur = (
+        (group_price - price_per_sqm) * float(listing.area_sqm or 1)
+        if group_price
+        else 0
+    )
+    savings_pct = (
+        (group_price - price_per_sqm) / group_price * 100
+        if group_price
+        else 0
+    )
+    return {
+        "id": listing.id,
+        "neighborhood": listing.neighborhood or "Unknown",
+        "rooms_text": _room_text(listing.rooms),
+        "area_sqm": f"{listing.area_sqm or 0:.0f}",
+        "construction_type": _construction_text(listing.construction_type),
+        "floor": listing.floor,
+        "total_floors": listing.total_floors,
+        "price_eur": _fmt_price(listing.price_eur),
+        "price_per_sqm": _fmt_price(listing.price_per_sqm_eur),
+        "zscore": f"< {ANOMALY_ZSCORE_THRESHOLD:g}",
+        "savings_eur": _fmt_price(max(savings_eur, 0)),
+        "savings_pct": f"{max(savings_pct, 0):.1f}",
+        "url": listing.url or "#",
+    }
+
+
+def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
+    """Recent underpriced listings using deduplicated median baselines."""
+    cutoff = utc_now() - timedelta(hours=hours)
+    group_prices = _group_medians(db)
+    rows = db.query(Listing).join(Alert).filter(
+        Listing.is_active.is_(True),
+        _unique_listing_clause(),
+        Listing.first_seen >= cutoff,
+        Alert.alert_type == "underpriced",
+        Alert.zscore.isnot(None),
+        Alert.zscore < ANOMALY_ZSCORE_THRESHOLD,
+    ).order_by(Alert.zscore.asc()).limit(10).all()
+
     if not rows:
-        rows = conn.execute("""
-            SELECT *,
-                   (SELECT AVG(l2.price_per_sqm_eur) 
-                    FROM listings l2 
-                    WHERE l2.neighborhood = l.neighborhood 
-                      AND l2.property_type = l.property_type
-                      AND l2.is_active = 1) as group_avg
-            FROM listings l
-            WHERE l.is_active = 1
-              AND l.first_seen >= ?
-              AND l.price_per_sqm_eur > 0
-            ORDER BY l.price_per_sqm_eur / NULLIF(
-                (SELECT AVG(l2.price_per_sqm_eur) 
-                 FROM listings l2 
-                 WHERE l2.neighborhood = l.neighborhood 
-                   AND l2.property_type = l.property_type
-                   AND l2.is_active = 1), 0) ASC
-            LIMIT 10
-        """, (cutoff,)).fetchall()
-
-    deals = []
-    for r in rows:
-        r = dict(r)
-        group_avg = r.get("group_avg") or 0
-        savings_eur = (group_avg - (r.get("price_per_sqm_eur") or 0)) * (r.get("area_sqm") or 1) if group_avg else 0
-        savings_pct = ((group_avg - (r.get("price_per_sqm_eur") or 0)) / group_avg * 100) if group_avg else 0
-
-        deals.append({
-            "id": r["id"],
-            "neighborhood": r.get("neighborhood", "Unknown"),
-            "rooms_text": _room_text(r.get("rooms")),
-            "area_sqm": f"{r.get('area_sqm', 0):.0f}",
-            "construction_type": _construction_text(r.get("construction_type")),
-            "floor": r.get("floor"),
-            "total_floors": r.get("total_floors"),
-            "price_eur": _fmt_price(r.get("price_eur")),
-            "price_per_sqm": _fmt_price(r.get("price_per_sqm_eur")),
-            "zscore": (
-                f"{r.get('zscore', 0) or 0:.2f}"
-                if r.get('zscore')
-                else f"< {ANOMALY_ZSCORE_THRESHOLD:g}"
+        candidates = db.query(Listing).filter(
+            Listing.is_active.is_(True),
+            _unique_listing_clause(),
+            Listing.first_seen >= cutoff,
+            Listing.price_per_sqm_eur > 0,
+        ).all()
+        rows = sorted(
+            candidates,
+            key=lambda listing: (
+                float(listing.price_per_sqm_eur)
+                / group_prices.get((listing.neighborhood, listing.property_type), 1)
             ),
-            "savings_eur": _fmt_price(max(savings_eur, 0)),
-            "savings_pct": f"{max(savings_pct, 0):.1f}",
-            "url": r.get("url", "#"),
-        })
+        )[:10]
 
-    return deals
+    return [
+        _deal_payload(
+            listing,
+            group_prices.get((listing.neighborhood, listing.property_type), 0),
+        )
+        for listing in rows
+    ]
 
 
 def _query_price_drops(
-    conn: sqlite3.Connection,
+    db: Session,
     min_drop_pct: float = PRICE_DROP_PCT_THRESHOLD,
 ) -> List[Dict[str, Any]]:
-    """Listings whose current price is ≥ min_drop_pct below first recorded price."""
-    rows = conn.execute("""
-        SELECT *,
-               first_price_eur,
-               ROUND((first_price_eur - price_eur) / first_price_eur * 100, 1) as drop_pct
-        FROM listings
-        WHERE is_active = 1
-          AND first_price_eur IS NOT NULL
-          AND price_changes > 0
-          AND first_price_eur > price_eur
-          AND (first_price_eur - price_eur) / first_price_eur * 100 >= ?
-        ORDER BY drop_pct DESC
-        LIMIT 8
-    """, (min_drop_pct,)).fetchall()
-
-    drops = []
-    for r in rows:
-        r = dict(r)
-        drops.append({
-            "id": r["id"],
-            "neighborhood": r.get("neighborhood", "Unknown"),
-            "rooms_text": _room_text(r.get("rooms")),
-            "area_sqm": f"{r.get('area_sqm', 0):.0f}",
-            "old_price": _fmt_price(r.get("first_price_eur")),
-            "new_price": _fmt_price(r.get("price_eur")),
-            "drop_pct": f"{r.get('drop_pct', 0):.1f}",
-            "url": r.get("url", "#"),
-        })
-
-    return drops
+    """Active unique listings below their first recorded price."""
+    rows = ListingRepository(db).get_price_drops(min_drop_pct=min_drop_pct)[:8]
+    return [
+        {
+            "id": listing.id,
+            "neighborhood": listing.neighborhood or "Unknown",
+            "rooms_text": _room_text(listing.rooms),
+            "area_sqm": f"{listing.area_sqm or 0:.0f}",
+            "old_price": _fmt_price(listing.first_price_eur),
+            "new_price": _fmt_price(listing.price_eur),
+            "drop_pct": f"{((listing.first_price_eur - listing.price_eur) / listing.first_price_eur * 100):.1f}",
+            "url": listing.url or "#",
+        }
+        for listing in rows
+    ]
 
 
-def _query_district_velocity(conn: sqlite3.Connection, days: int = 7) -> List[Dict[str, Any]]:
-    """Per-district: new listings added vs. listings that went inactive (proxy for sold)."""
-    cutoff = (utc_now() - timedelta(days=days)).isoformat()
-
-    rows = conn.execute("""
-        SELECT 
-            neighborhood,
-            SUM(CASE WHEN first_seen >= ? THEN 1 ELSE 0 END) as added,
-            SUM(CASE WHEN is_active = 0 AND last_seen >= ? THEN 1 ELSE 0 END) as sold,
-            ROUND(AVG(CASE WHEN is_active = 1 THEN price_per_sqm_eur END), 0) as avg_price,
-            COUNT(*) as total
-        FROM listings
-        WHERE neighborhood IS NOT NULL
-        GROUP BY neighborhood
-        HAVING total >= 5
-        ORDER BY added DESC
-        LIMIT 8
-    """, (cutoff, cutoff)).fetchall()
+def _query_district_velocity(db: Session, days: int = 7) -> List[Dict[str, Any]]:
+    """Per-district unique supply and off-market velocity with median pricing."""
+    cutoff = utc_now() - timedelta(days=days)
+    rows = db.query(Listing).filter(
+        Listing.neighborhood.isnot(None),
+        _unique_listing_clause(),
+    ).order_by(Listing.id).all()
+    grouped = defaultdict(list)
+    for listing in rows:
+        grouped[listing.neighborhood].append(listing)
 
     districts = []
-    for r in rows:
-        r = dict(r)
-        added = r.get("added", 0) or 0
-        sold = r.get("sold", 0) or 0
-        # velocity: positive = more supply coming in, negative = market absorbing fast
+    for neighborhood, listings in grouped.items():
+        if len(listings) < 5:
+            continue
+        added = sum(
+            1 for listing in listings
+            if listing.first_seen and listing.first_seen >= cutoff
+        )
+        sold = sum(
+            1 for listing in listings
+            if not listing.is_active
+            and listing.last_seen
+            and listing.last_seen >= cutoff
+        )
+        active_prices = [
+            float(listing.price_per_sqm_eur)
+            for listing in listings
+            if listing.is_active and listing.price_per_sqm_eur is not None
+        ]
+        district_price = round(float(median(active_prices))) if active_prices else None
         velocity = added - sold
         if velocity > 2:
             label = "🔥 Hot supply"
@@ -194,72 +200,71 @@ def _query_district_velocity(conn: sqlite3.Connection, days: int = 7) -> List[Di
             label = "📈 Absorbing"
         else:
             label = "➡️ Stable"
+        districts.append(
+            {
+                "name": neighborhood or "Unknown",
+                "added": added,
+                "sold": sold,
+                "avg_price": _fmt_price(district_price),
+                "velocity_score": velocity,
+                "velocity_label": label,
+            }
+        )
 
-        districts.append({
-            "name": r.get("neighborhood", "Unknown"),
-            "added": added,
-            "sold": sold,
-            "avg_price": _fmt_price(r.get("avg_price")),
-            "velocity_score": velocity,
-            "velocity_label": label,
-        })
-
-    return districts
+    districts.sort(key=lambda district: district["added"], reverse=True)
+    return districts[:8]
 
 
-def _query_top_pick(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
-    """Best single opportunity: highest savings %, active, apartment."""
-    # Try alerts table first
-    row = conn.execute("""
-        SELECT l.*, a.zscore, a.savings_eur, a.savings_pct,
-               (SELECT AVG(l2.price_per_sqm_eur) 
-                FROM listings l2 
-                WHERE l2.neighborhood = l.neighborhood 
-                  AND l2.property_type = l.property_type
-                  AND l2.is_active = 1) as group_avg
-        FROM alerts a
-        JOIN listings l ON l.id = a.listing_id
-        WHERE l.is_active = 1
-          AND a.zscore < ?
-          AND l.property_type = 'apartment'
-          AND a.savings_pct > 0
-        ORDER BY a.savings_pct DESC
-        LIMIT 1
-    """, (ANOMALY_ZSCORE_THRESHOLD,)).fetchone()
+def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
+    """Best active unique apartment opportunity against its median baseline."""
+    group_prices = _group_medians(db)
+    alert_row = db.query(Listing, Alert).join(Alert).filter(
+        Listing.is_active.is_(True),
+        _unique_listing_clause(),
+        Listing.property_type == "apartment",
+        Alert.zscore < ANOMALY_ZSCORE_THRESHOLD,
+        Alert.savings_pct > 0,
+    ).order_by(Alert.savings_pct.desc()).first()
 
-    if not row:
-        # Fallback: cheapest per-sqm active apartment relative to neighborhood
-        row = conn.execute("""
-            SELECT l.*,
-                   (SELECT AVG(l2.price_per_sqm_eur) 
-                    FROM listings l2 
-                    WHERE l2.neighborhood = l.neighborhood 
-                      AND l2.property_type = 'apartment'
-                      AND l2.is_active = 1) as group_avg
-            FROM listings l
-            WHERE l.is_active = 1
-              AND l.property_type = 'apartment'
-              AND l.price_per_sqm_eur > 0
-              AND l.area_sqm > 30
-            ORDER BY l.price_per_sqm_eur / NULLIF(
-                (SELECT AVG(l2.price_per_sqm_eur) 
-                 FROM listings l2 
-                 WHERE l2.neighborhood = l.neighborhood 
-                   AND l2.property_type = 'apartment'
-                   AND l2.is_active = 1), 0) ASC
-            LIMIT 1
-        """).fetchone()
+    if alert_row:
+        listing, alert = alert_row
+        stored_savings_pct = alert.savings_pct
+        stored_savings_eur = alert.savings_eur
+    else:
+        candidates = db.query(Listing).filter(
+            Listing.is_active.is_(True),
+            _unique_listing_clause(),
+            Listing.property_type == "apartment",
+            Listing.price_per_sqm_eur > 0,
+            Listing.area_sqm > 30,
+        ).all()
+        candidates = [
+            listing for listing in candidates
+            if group_prices.get((listing.neighborhood, "apartment"), 0) > 0
+        ]
+        if not candidates:
+            return None
+        listing = min(
+            candidates,
+            key=lambda candidate: (
+                float(candidate.price_per_sqm_eur)
+                / group_prices[(candidate.neighborhood, "apartment")]
+            ),
+        )
+        stored_savings_pct = None
+        stored_savings_eur = None
 
-    if not row:
-        return None
+    group_price = group_prices.get((listing.neighborhood, listing.property_type), 0)
+    price_sqm = float(listing.price_per_sqm_eur or 0)
+    savings_pct = stored_savings_pct or (
+        (group_price - price_sqm) / group_price * 100 if group_price else 0
+    )
+    savings_eur = stored_savings_eur or (
+        (group_price - price_sqm) * float(listing.area_sqm or 1)
+        if group_price
+        else 0
+    )
 
-    r = dict(row)
-    group_avg = r.get("group_avg") or 0
-    price_sqm = r.get("price_per_sqm_eur") or 0
-    savings_pct = r.get("savings_pct") or ((group_avg - price_sqm) / group_avg * 100 if group_avg else 0)
-    savings_eur = r.get("savings_eur") or ((group_avg - price_sqm) * (r.get("area_sqm") or 1) if group_avg else 0)
-
-    # Build reasoning
     reasons = []
     if savings_pct > 20:
         reasons.append(f"Priced {savings_pct:.0f}% below neighborhood average")
@@ -267,40 +272,48 @@ def _query_top_pick(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
         reasons.append(f"Solid {savings_pct:.0f}% discount vs. market")
     else:
         reasons.append(f"Below average pricing at €{_fmt_price(price_sqm)}/m²")
-
-    if r.get("construction_type") == "brick":
+    if listing.construction_type == "brick":
         reasons.append("Brick construction (premium quality)")
-    if r.get("floor") and r.get("total_floors"):
-        if r["floor"] > 1 and r["floor"] < r["total_floors"]:
-            reasons.append(f"Mid-floor ({r['floor']}/{r['total_floors']}) — optimal")
-    if r.get("days_on_market") and r["days_on_market"] < 7:
+    if listing.floor and listing.total_floors:
+        if listing.floor > 1 and listing.floor < listing.total_floors:
+            reasons.append(f"Mid-floor ({listing.floor}/{listing.total_floors}) — optimal")
+    if listing.days_on_market and listing.days_on_market < 7:
         reasons.append("Fresh listing — just appeared")
-    elif r.get("price_changes") and r["price_changes"] > 0:
+    elif listing.price_changes and listing.price_changes > 0:
         reasons.append("Seller reduced price — motivated")
 
     return {
-        "neighborhood": r.get("neighborhood", "Unknown"),
-        "rooms_text": _room_text(r.get("rooms")),
-        "area_sqm": f"{r.get('area_sqm', 0):.0f}",
-        "construction_type": _construction_text(r.get("construction_type")),
-        "price_eur": _fmt_price(r.get("price_eur")),
+        "neighborhood": listing.neighborhood or "Unknown",
+        "rooms_text": _room_text(listing.rooms),
+        "area_sqm": f"{listing.area_sqm or 0:.0f}",
+        "construction_type": _construction_text(listing.construction_type),
+        "price_eur": _fmt_price(listing.price_eur),
         "price_per_sqm": _fmt_price(price_sqm),
         "savings_pct": f"{max(savings_pct, 0):.0f}",
         "savings_eur": _fmt_price(max(savings_eur, 0)),
         "reasoning": ". ".join(reasons) + ".",
-        "url": r.get("url", "#"),
+        "url": listing.url or "#",
     }
 
 
-def _get_total_active(conn: sqlite3.Connection) -> int:
-    row = conn.execute("SELECT COUNT(*) as cnt FROM listings WHERE is_active = 1").fetchone()
-    return dict(row).get("cnt", 0)
+def _get_total_active(db: Session) -> int:
+    return db.query(Listing).filter(
+        Listing.is_active.is_(True),
+        _unique_listing_clause(),
+    ).count()
 
 
-def _get_new_today_count(conn: sqlite3.Connection, hours: int = 24) -> int:
-    cutoff = (utc_now() - timedelta(hours=hours)).isoformat()
-    row = conn.execute("SELECT COUNT(*) as cnt FROM listings WHERE first_seen >= ?", (cutoff,)).fetchone()
-    return dict(row).get("cnt", 0)
+def _get_new_today_count(db: Session, hours: int = 24) -> int:
+    cutoff = utc_now() - timedelta(hours=hours)
+    return db.query(Listing).filter(
+        Listing.first_seen >= cutoff,
+        _unique_listing_clause(),
+    ).count()
+
+
+def _session_for_path(db_path: str) -> Session:
+    engine = create_engine(f"sqlite:///{Path(db_path).expanduser().resolve()}")
+    return sessionmaker(bind=engine)()
 
 
 # ─── Sample data for testing ─────────────────────────────────────────────────
@@ -408,19 +421,21 @@ def generate_daily_email(
     db_path: str | None = None,
     dashboard_url: str = "https://sofia-realestate.vercel.app",
     use_sample: bool = False,
+    db: Session | None = None,
 ) -> Tuple[str, str, Dict[str, Any]]:
     """Generate the daily email digest.
 
     Args:
-        db_path: Path to SQLite database. If None, uses default location.
+        db_path: Optional SQLite path for CLI/backward compatibility.
         dashboard_url: URL to the live dashboard.
         use_sample: If True, use sample data (for testing / preview).
+        db: Existing shared SQLAlchemy session. Takes precedence over db_path.
 
     Returns:
         Tuple of (html_content, plain_text, context_dict).
         context_dict is the raw data used — useful for the dashboard API.
     """
-    if use_sample or db_path is None:
+    if use_sample or (db is None and db_path is None):
         if db_path is None:
             default_db = DATA_DIR / "listings.db"
             if not default_db.exists():
@@ -429,17 +444,19 @@ def generate_daily_email(
     if use_sample:
         context = _sample_data()
     else:
-        db_path = db_path or str(DATA_DIR / "listings.db")
-        conn = _connect(db_path)
-
-        new_deals = _query_new_deals(conn)
-        price_drops = _query_price_drops(conn)
-        hot_districts = _query_district_velocity(conn)
-        top_pick = _query_top_pick(conn)
-        total_active = _get_total_active(conn)
-        new_today = _get_new_today_count(conn)
-
-        conn.close()
+        owns_session = db is None
+        if db is None:
+            db = _session_for_path(db_path) if db_path else get_db()
+        try:
+            new_deals = _query_new_deals(db)
+            price_drops = _query_price_drops(db)
+            hot_districts = _query_district_velocity(db)
+            top_pick = _query_top_pick(db)
+            total_active = _get_total_active(db)
+            new_today = _get_new_today_count(db)
+        finally:
+            if owns_session:
+                db.close()
 
         context = {
             "date": datetime.now().strftime("%B %d, %Y"),
