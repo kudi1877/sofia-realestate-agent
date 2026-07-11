@@ -89,7 +89,7 @@ def test_build_listings_payload_eager_loads_alerts_and_preserves_latest_values()
     assert by_source["export-1"]["total_floors"] == 8
     assert by_source["export-1"]["price_changes"] == 1
     assert by_source["export-1"]["site_count"] == 1
-    assert "last_seen" not in by_source["export-1"]
+    assert by_source["export-1"]["last_seen"] == "2026-01-02T00:00:00"
     assert alert_selects == 1
 
 
@@ -138,7 +138,52 @@ def test_build_listings_payload_counts_canonical_sibling_sources_and_exports_med
 
     assert len(payload["listings"]) == 1
     assert payload["listings"][0]["site_count"] == 2
+    assert payload["listings"][0]["cross_source_links"] == [
+        {"source": "other", "url": "https://example.test/duplicate"},
+        {"source": "test", "url": "https://example.test/primary"},
+    ]
     assert payload["neighborhoods"][0]["medianPricePerSqm"] == 2050.0
+
+
+def test_build_listings_payload_embeds_changed_price_history_and_percentile():
+    _engine, db = session()
+    low = listing("low")
+    low.price_eur = 90000
+    low.price_per_sqm_eur = 1800
+    low.last_seen = datetime(2026, 1, 3)
+    middle = listing("middle")
+    middle.price_per_sqm_eur = 2000
+    high = listing("high")
+    high.price_per_sqm_eur = 2200
+    db.add_all([low, middle, high])
+    db.flush()
+    db.add(
+        PriceHistory(
+            listing_id=low.id,
+            price_eur=100000,
+            price_per_sqm_eur=2000,
+            recorded_at=datetime(2026, 1, 1),
+        )
+    )
+    db.commit()
+
+    payload = _build_listings_payload(db)
+    exported = next(item for item in payload["listings"] if item["id"] == low.id)
+
+    assert exported["price_percentile"] == 33.3
+    assert exported["last_seen"] == "2026-01-03T00:00:00"
+    assert exported["price_history"] == [
+        {
+            "date": "2026-01-01T00:00:00",
+            "price_eur": 100000.0,
+            "price_per_sqm_eur": 2000.0,
+        },
+        {
+            "date": "2026-01-03T00:00:00",
+            "price_eur": 90000.0,
+            "price_per_sqm_eur": 1800.0,
+        },
+    ]
 
 
 def test_write_json_uses_compact_separators(tmp_path):

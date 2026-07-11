@@ -16,12 +16,13 @@ Auto-push:
 from __future__ import annotations
 
 import json
+from bisect import bisect_right
+from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 
 from loguru import logger
-from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from src.config import DASHBOARD_REPO_PATH, DASHBOARD_DATA_DIR, DASHBOARD_AUTO_PUSH
@@ -48,7 +49,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
 
     rows = (
         db.query(Listing)
-        .options(selectinload(Listing.alerts))
+        .options(selectinload(Listing.alerts), selectinload(Listing.price_history))
         .filter((Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)))
         .filter(
             (Listing.is_active.is_(True))
@@ -56,20 +57,34 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         )
         .all()
     )
-    site_counts = dict(
-        db.query(Listing.canonical_id, func.count(func.distinct(Listing.source)))
+    sibling_rows = (
+        db.query(Listing.canonical_id, Listing.source, Listing.url)
         .filter(Listing.canonical_id.isnot(None))
         .filter(
             (Listing.is_active.is_(True))
             | (Listing.last_seen >= cutoff)
         )
-        .group_by(Listing.canonical_id)
         .all()
     )
+    links_by_canonical: Dict[str, Dict[str, str]] = defaultdict(dict)
+    for canonical_id, source, url in sibling_rows:
+        links_by_canonical[canonical_id].setdefault(source, url)
+
+    neighborhood_prices: Dict[str, List[float]] = defaultdict(list)
+    for row in rows:
+        if row.neighborhood and row.price_per_sqm_eur is not None:
+            neighborhood_prices[row.neighborhood].append(float(row.price_per_sqm_eur))
+    for prices in neighborhood_prices.values():
+        prices.sort()
 
     listings: List[Dict[str, Any]] = []
     for l in rows:
         zscore, savings_pct = _latest_alert_values_for_listing(l)
+        source_links = links_by_canonical.get(l.canonical_id, {})
+        percentile = _price_percentile(
+            neighborhood_prices.get(l.neighborhood, []),
+            l.price_per_sqm_eur,
+        )
         listings.append(
             _omit_none_values(
                 {
@@ -91,7 +106,18 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     "floor": l.floor,
                     "total_floors": l.total_floors,
                     "price_changes": l.price_changes or 0,
-                    "site_count": site_counts.get(l.canonical_id, 1),
+                    "site_count": max(1, len(source_links)),
+                    "cross_source_links": (
+                        [
+                            {"source": source, "url": url}
+                            for source, url in sorted(source_links.items())
+                        ]
+                        if len(source_links) > 1
+                        else None
+                    ),
+                    "price_history": _listing_price_history(l),
+                    "price_percentile": percentile,
+                    "days_on_market": l.days_on_market,
                     # zscore + savings_pct are computed during analysis but stored on
                     # the Alert, not the Listing. The dashboard's anomaly highlighting
                     # uses the latest underpriced alert per listing.
@@ -100,6 +126,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     # When we first scraped this ad → effectively the "added on" date
                     # for the user.
                     "first_seen": l.first_seen.isoformat() if l.first_seen else None,
+                    "last_seen": l.last_seen.isoformat() if l.last_seen else None,
                     # Soft-depreciation flag — true when the listing is still on the
                     # source site (we re-confirmed it in the latest scrape). False
                     # means we haven't seen it for ≥1 scrape but it's within 30d.
@@ -153,6 +180,41 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
 
 def _omit_none_values(item: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in item.items() if value is not None}
+
+
+def _listing_price_history(l: Listing) -> List[Dict[str, Any]] | None:
+    """Return de-duplicated price changes, including the listing's current price."""
+    points = [
+        {
+            "date": item.recorded_at.isoformat(),
+            "price_eur": round(float(item.price_eur), 2),
+            "price_per_sqm_eur": round(float(item.price_per_sqm_eur), 2),
+        }
+        for item in sorted(l.price_history or [], key=lambda item: item.recorded_at)
+        if item.recorded_at and item.price_eur is not None and item.price_per_sqm_eur is not None
+    ]
+    if l.last_seen and l.price_eur is not None and l.price_per_sqm_eur is not None:
+        points.append(
+            {
+                "date": l.last_seen.isoformat(),
+                "price_eur": round(float(l.price_eur), 2),
+                "price_per_sqm_eur": round(float(l.price_per_sqm_eur), 2),
+            }
+        )
+
+    changes: List[Dict[str, Any]] = []
+    for point in points:
+        if changes and changes[-1]["price_eur"] == point["price_eur"]:
+            changes[-1] = point
+        else:
+            changes.append(point)
+    return changes if len(changes) > 1 else None
+
+
+def _price_percentile(prices: List[float], price: float | None) -> float | None:
+    if not prices or price is None:
+        return None
+    return round(100 * bisect_right(prices, float(price)) / len(prices), 1)
 
 
 def _latest_alert_values_for_listing(l: Listing) -> tuple[float | None, float | None]:
