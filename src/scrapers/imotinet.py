@@ -9,6 +9,7 @@ and updated selectors to match current site structure.
 
 import re
 from typing import List, Dict, Any, Optional
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from loguru import logger
@@ -148,6 +149,9 @@ class ImotiNetScraper(BaseScraper):
             
             if url.startswith('/'):
                 url = f"{self.BASE_URL}{url}"
+
+            image = card.find('img', src=True)
+            image_url = urljoin(self.BASE_URL, image.get('src', '')) if image else None
             
             # Extract ID from URL: /bg/obiava/.../ID/
             id_match = re.search(r'/obiava/(?:[^/]+/)*(\d+)/', url)
@@ -218,6 +222,7 @@ class ImotiNetScraper(BaseScraper):
                 'source': 'imotinet',
                 'source_id': source_id,
                 'url': url,
+                'image_url': image_url or None,
                 'title': text[:250] if len(text) > 250 else text,
                 'price_bgn': price_bgn,
                 'price_eur': price_eur,

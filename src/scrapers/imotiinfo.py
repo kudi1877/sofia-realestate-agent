@@ -9,6 +9,7 @@ Data is clean JSON with: id, url, price, currency, pubtypetxt, nraions, floor, t
 import re
 import json
 from typing import List, Dict, Any, Optional
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from loguru import logger
@@ -96,6 +97,10 @@ class ImotiInfoScraper(BaseScraper):
             source_id = id_match.group(1) if id_match else item.get('id', str(hash(url_path)))
             
             full_url = f"{self.BASE_URL}{url_path}" if url_path.startswith('/') else url_path
+
+            pictures = item.get('pictures') or []
+            image_src = pictures[0].get('src') if pictures and isinstance(pictures[0], dict) else None
+            image_url = urljoin(self.BASE_URL, image_src) if image_src else None
             
             # Price (handle non-breaking spaces \xa0)
             price_str = (item.get('price') or '0').replace('\xa0', '').replace(' ', '').replace(',', '')
@@ -226,6 +231,7 @@ class ImotiInfoScraper(BaseScraper):
                 'source': 'imotiinfo',
                 'source_id': source_id,
                 'url': full_url,
+                'image_url': image_url,
                 'title': f'{neighborhood}, София',
                 'price_eur': round(price_eur, 2),
                 'price_bgn': round(price_bgn, 2),

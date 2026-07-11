@@ -8,6 +8,7 @@ Listing items: div.item.TOP or div.item.BEST
 
 import re
 from typing import List, Dict, Any, Optional
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from loguru import logger
@@ -60,6 +61,9 @@ class ImotBgScraper(BaseScraper):
             href = link.get('href', '')
             if href.startswith('//'):
                 href = 'https:' + href
+
+            image = item_div.select_one('img.pic')
+            image_url = urljoin(self.BASE_URL, image.get('src', '')) if image else None
             
             # Extract source_id from URL
             id_match = re.search(r'obiava-(\w+)', href)
@@ -194,6 +198,7 @@ class ImotBgScraper(BaseScraper):
                 'source': 'imotbg',
                 'source_id': source_id,
                 'url': href,
+                'image_url': image_url or None,
                 'title': f'{neighborhood}, София',
                 'price_eur': round(price_eur, 2),
                 'price_bgn': round(price_bgn, 2),

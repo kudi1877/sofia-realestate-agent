@@ -60,6 +60,20 @@ class HomesBgScraper:
 
         total_count = cls._api_total_count(data)
         return total_count is not None and stop_index + 1 >= total_count
+
+    @staticmethod
+    def _primary_image_url(item: Dict[str, Any]) -> Optional[str]:
+        """Build the public thumbnail URL from Homes.bg API photo metadata."""
+        photo = item.get('photo')
+        if not isinstance(photo, dict):
+            photos = item.get('photos') or []
+            photo = photos[0] if photos and isinstance(photos[0], dict) else None
+        if not photo:
+            return None
+
+        path = str(photo.get('path') or '').lstrip('/')
+        name = str(photo.get('name') or '')
+        return f"https://g1.homes.bg/{path}{name}b.jpg" if name else None
     
     def _parse_listing(self, item: dict) -> Optional[Dict[str, Any]]:
         """Parse a single listing from the API response."""
@@ -177,6 +191,7 @@ class HomesBgScraper:
                 'source': 'homesbg',
                 'source_id': str(item.get('id', '')),
                 'url': f"{self.BASE_URL}{item.get('viewHref', '')}",
+                'image_url': self._primary_image_url(item),
                 'title': f"{neighborhood}, София",
                 'price_eur': round(price_eur, 2),
                 'price_bgn': round(price_bgn, 2),

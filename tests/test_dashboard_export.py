@@ -20,6 +20,7 @@ def listing(source_id):
         source="test",
         source_id=source_id,
         url=f"https://example.test/{source_id}",
+        image_url=f"https://images.example.test/{source_id}.jpg",
         title="Export listing",
         neighborhood="Люлин",
         property_type="apartment",
@@ -80,6 +81,7 @@ def test_build_listings_payload_eager_loads_alerts_and_preserves_latest_values()
     assert by_source["export-1"]["savings_pct"] == 15.4
     assert by_source["export-2"]["zscore"] == -1.75
     assert by_source["export-2"]["savings_pct"] == 8.2
+    assert by_source["export-1"]["image_url"] == "https://images.example.test/export-1.jpg"
     assert "floor" not in by_source["export-1"]
     assert "total_floors" not in by_source["export-1"]
     assert "last_seen" not in by_source["export-1"]
@@ -91,6 +93,7 @@ def test_build_listings_payload_omits_none_listing_values():
     row = listing("export-no-alert")
     row.rooms = None
     row.construction_type = None
+    row.image_url = None
     db.add(row)
     db.commit()
 
@@ -101,6 +104,7 @@ def test_build_listings_payload_omits_none_listing_values():
     assert "construction_type" not in item
     assert "zscore" not in item
     assert "savings_pct" not in item
+    assert "image_url" not in item
 
 
 def test_write_json_uses_compact_separators(tmp_path):

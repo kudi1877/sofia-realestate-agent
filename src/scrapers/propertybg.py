@@ -9,6 +9,7 @@ Fix: Proper UTF-8 encoding handling and updated selectors for current site struc
 
 import re
 from typing import List, Dict, Any, Optional
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from loguru import logger
@@ -73,6 +74,10 @@ class PropertyBGScraper(BaseScraper):
             url = link.get('href', '')
             if url.startswith('/'):
                 url = f"{self.BASE_URL}{url}"
+
+            image = element.select_one('.prop_image_url[data-blazy]')
+            image_src = image.get('data-blazy') if image else None
+            image_url = urljoin(self.BASE_URL, image_src) if image_src else None
             
             # Extract ID from URL: /property-{ID}-description
             id_match = re.search(r'/property-(\d+)-', url)
@@ -170,6 +175,7 @@ class PropertyBGScraper(BaseScraper):
                 'source': 'propertybg',
                 'source_id': source_id,
                 'url': url,
+                'image_url': image_url,
                 'title': text[:300] if len(text) > 300 else text,
                 'price_bgn': price_bgn,
                 'price_eur': price_eur,
@@ -209,6 +215,7 @@ class PropertyBGScraper(BaseScraper):
         
         # Try various container selectors
         selectors = [
+            '.panel.offer',
             '.property-item',
             '.listing-item',
             '.property',

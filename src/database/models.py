@@ -38,6 +38,7 @@ class Listing(Base):
     duplicate_of = Column(String(100))  # source_id of the primary listing
     
     url = Column(Text, nullable=False)
+    image_url = Column(Text)
     title = Column(Text)
     
     # Pricing
@@ -214,6 +215,7 @@ def init_db():
             ("is_sold", "BOOLEAN DEFAULT 0"),
             ("sold_date", "DATETIME"),
             ("days_on_market", "INTEGER"),
+            ("image_url", "TEXT"),
         ],
     }
 

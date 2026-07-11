@@ -65,6 +65,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     "id": l.id,
                     "source": l.source,
                     "url": l.url,
+                    "image_url": l.image_url,
                     "neighborhood": l.neighborhood,
                     "property_type": l.property_type,
                     "rooms": l.rooms,
