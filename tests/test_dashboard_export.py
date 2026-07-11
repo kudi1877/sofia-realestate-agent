@@ -1,10 +1,22 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from src.database.models import Alert, Base, Listing, Neighborhood, PriceHistory
-from src.exporters.dashboard import _build_digest_payload, _build_listings_payload, _write_json
+from src.database.models import (
+    Alert,
+    Base,
+    Listing,
+    Neighborhood,
+    NeighborhoodStatsHistory,
+    PriceHistory,
+)
+from src.exporters.dashboard import (
+    _build_digest_payload,
+    _build_listings_payload,
+    _build_market_payload,
+    _write_json,
+)
 from src.utils.time import utc_now
 
 
@@ -184,6 +196,57 @@ def test_build_listings_payload_embeds_changed_price_history_and_percentile():
             "price_per_sqm_eur": 1800.0,
         },
     ]
+
+
+def test_build_market_payload_is_deduplicated_median_first_and_snapshot_ready(monkeypatch):
+    _engine, db = session()
+    now = datetime(2026, 7, 11)
+    monkeypatch.setattr("src.exporters.dashboard.utc_now", lambda: now)
+
+    rows = [listing("market-low"), listing("market-mid"), listing("market-high")]
+    for index, row in enumerate(rows):
+        row.canonical_id = f"market-{index}"
+        row.price_per_sqm_eur = 1800 + index * 200
+        row.first_seen = now - timedelta(days=10 + index * 10)
+    duplicate = listing("market-duplicate")
+    duplicate.canonical_id = "market-0"
+    duplicate.is_duplicate = True
+    duplicate.price_per_sqm_eur = 9000
+    sold = listing("market-sold")
+    sold.is_active = False
+    sold.is_sold = True
+    db.add_all(rows + [duplicate, sold])
+    db.add(
+        Neighborhood(
+            name="Люлин",
+            avg_price_per_sqm=2100,
+            median_price_per_sqm=2000,
+            listing_count=3,
+        )
+    )
+    for index in range(8):
+        db.add(
+            NeighborhoodStatsHistory(
+                neighborhood="Люлин",
+                snapshot_date=datetime(2026, 3, 1) + timedelta(days=index * 10),
+                median_price_per_sqm=1800 + index * 25,
+                mean_price_per_sqm=1850 + index * 25,
+                listing_count=3,
+            )
+        )
+    db.commit()
+
+    payload = _build_market_payload(db)
+
+    assert payload["city"]["median_price_per_sqm"] == 2000.0
+    assert payload["city"]["active"] == 3
+    assert payload["city"]["off_market"] == 1
+    assert "avg_price_per_sqm" not in payload["city"]
+    hood = payload["neighborhoods"][0]
+    assert hood["median_days_on_market"] == 20.0
+    assert hood["trend_30d_pct"] == 3.95
+    assert hood["trend_direction"] == "up"
+    assert len(hood["history"]) == 8
 
 
 def test_write_json_uses_compact_separators(tmp_path):

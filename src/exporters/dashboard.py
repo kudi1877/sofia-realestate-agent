@@ -1,8 +1,9 @@
 """Dashboard data exporter.
 
-Regenerates the two JSON files the Next.js dashboard reads from disk:
+Regenerates the three JSON files the Next.js dashboard reads from disk:
   - data/dashboard/data.json          (all listings + neighborhood stats + aggregate)
   - data/dashboard/daily-digest.json  (today's new deals, price drops, hot districts)
+  - data/dashboard/market.json        (pre-aggregated city/neighborhood analytics)
 
 Optionally git-commits and pushes the dashboard repo so Vercel auto-deploys.
 
@@ -18,15 +19,21 @@ from __future__ import annotations
 import json
 from bisect import bisect_right
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, List
 
 from loguru import logger
 from sqlalchemy.orm import Session, selectinload
 
-from src.config import DASHBOARD_REPO_PATH, DASHBOARD_DATA_DIR, DASHBOARD_AUTO_PUSH
-from src.database.models import Listing, Neighborhood
+from src.config import (
+    DASHBOARD_REPO_PATH,
+    DASHBOARD_DATA_DIR,
+    DASHBOARD_AUTO_PUSH,
+    MIN_LISTINGS_PER_GROUP,
+)
+from src.database.models import Listing, Neighborhood, NeighborhoodStatsHistory
 from src.utils.git import changed_files, commit_and_push
 from src.utils.time import utc_now
 
@@ -165,6 +172,9 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     avg_price_per_sqm = (
         round(sum(prices_per_sqm) / len(prices_per_sqm), 2) if prices_per_sqm else 0
     )
+    median_price_per_sqm = (
+        round(float(median(prices_per_sqm)), 2) if prices_per_sqm else 0
+    )
 
     return {
         "listings": listings,
@@ -173,6 +183,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
             "totalListings": total_listings,
             "totalDeals": total_deals,
             "avgPricePerSqm": avg_price_per_sqm,
+            "medianPricePerSqm": median_price_per_sqm,
         },
         "updatedAt": utc_now().isoformat(),
     }
@@ -231,6 +242,152 @@ def _latest_alert_values_for_listing(l: Listing) -> tuple[float | None, float | 
         if zscore is not None and savings_pct is not None:
             break
     return zscore, savings_pct
+
+
+# ── Market analytics JSON ────────────────────────────────────────────────────
+
+
+def _build_market_payload(db: Session) -> Dict[str, Any]:
+    """Build median-first, pre-aggregated market analytics for the dashboard."""
+    now = utc_now()
+    unique_clause = (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None))
+    active_rows = db.query(Listing).filter(
+        Listing.is_active.is_(True),
+        unique_clause,
+    ).all()
+
+    all_prices = [
+        float(row.price_per_sqm_eur)
+        for row in active_rows
+        if row.price_per_sqm_eur and row.price_per_sqm_eur > 0
+    ]
+    apartment_prices = [
+        float(row.price_per_sqm_eur)
+        for row in active_rows
+        if row.property_type == "apartment"
+        and row.price_per_sqm_eur
+        and row.price_per_sqm_eur > 0
+    ]
+    city_prices = apartment_prices or all_prices
+
+    dom_all: Dict[str, List[int]] = defaultdict(list)
+    dom_apartments: Dict[str, List[int]] = defaultdict(list)
+    for row in active_rows:
+        if not row.neighborhood or not row.first_seen:
+            continue
+        days = max(0, (now - row.first_seen).days)
+        dom_all[row.neighborhood].append(days)
+        if row.property_type == "apartment":
+            dom_apartments[row.neighborhood].append(days)
+
+    history_by_neighborhood: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    history_rows = db.query(NeighborhoodStatsHistory).order_by(
+        NeighborhoodStatsHistory.neighborhood,
+        NeighborhoodStatsHistory.snapshot_date,
+    ).all()
+    for row in history_rows:
+        history_by_neighborhood[row.neighborhood].append(
+            {
+                "date": row.snapshot_date.isoformat(),
+                "median_price_per_sqm": round(float(row.median_price_per_sqm), 2),
+                "listing_count": int(row.listing_count),
+            }
+        )
+
+    neighborhoods = []
+    hood_rows = db.query(Neighborhood).filter(
+        Neighborhood.median_price_per_sqm.isnot(None),
+        Neighborhood.median_price_per_sqm > 0,
+    ).all()
+    for hood in hood_rows:
+        history = history_by_neighborhood.get(hood.name, [])
+        trend_pct = _snapshot_trend_pct(history, days=30)
+        apartment_dom = dom_apartments.get(hood.name) or []
+        dom_values = (
+            apartment_dom
+            if len(apartment_dom) >= MIN_LISTINGS_PER_GROUP
+            else dom_all.get(hood.name) or []
+        )
+        neighborhoods.append(
+            {
+                "neighborhood": hood.name,
+                "median_price_per_sqm": round(float(hood.median_price_per_sqm), 2),
+                "listing_count": int(hood.listing_count or 0),
+                "median_days_on_market": (
+                    round(float(median(dom_values)), 1) if dom_values else None
+                ),
+                "trend_30d_pct": trend_pct,
+                "trend_direction": (
+                    "up"
+                    if trend_pct is not None and trend_pct > 0.5
+                    else "down"
+                    if trend_pct is not None and trend_pct < -0.5
+                    else "stable"
+                    if trend_pct is not None
+                    else "insufficient history"
+                ),
+                "history": history,
+            }
+        )
+
+    off_market = db.query(Listing).filter(
+        Listing.is_sold.is_(True),
+        unique_clause,
+    ).count()
+    new_this_week = sum(
+        1
+        for row in active_rows
+        if row.first_seen and row.first_seen >= now - timedelta(days=7)
+    )
+    price_drops = sum(
+        1
+        for row in active_rows
+        if row.first_price_eur is not None and row.price_eur < row.first_price_eur
+    )
+
+    return {
+        "city": {
+            "median_price_per_sqm": (
+                round(float(median(city_prices)), 2) if city_prices else 0
+            ),
+            "active": len(active_rows),
+            "new_this_week": new_this_week,
+            "price_drops": price_drops,
+            "off_market": off_market,
+        },
+        "neighborhoods": sorted(
+            neighborhoods,
+            key=lambda item: item["listing_count"],
+            reverse=True,
+        ),
+        "updated_at": now.isoformat(),
+    }
+
+
+def _snapshot_trend_pct(history: List[Dict[str, Any]], days: int) -> float | None:
+    if len(history) < 2:
+        return None
+
+    latest = history[-1]
+    latest_date = datetime.fromisoformat(latest["date"])
+    cutoff = latest_date - timedelta(days=days)
+    previous = next(
+        (
+            point
+            for point in reversed(history[:-1])
+            if datetime.fromisoformat(point["date"]) <= cutoff
+        ),
+        None,
+    )
+    if previous is None or previous["median_price_per_sqm"] <= 0:
+        return None
+
+    return round(
+        (latest["median_price_per_sqm"] - previous["median_price_per_sqm"])
+        / previous["median_price_per_sqm"]
+        * 100,
+        2,
+    )
 
 
 # ── Daily digest JSON ─────────────────────────────────────────────────────────
@@ -394,7 +551,11 @@ def _commit_dashboard_data(repo: Path, message: str) -> bool:
     changed = changed_files(repo)
     relevant = [
         f for f in changed
-        if f in ("data/dashboard/data.json", "data/dashboard/daily-digest.json")
+        if f in (
+            "data/dashboard/data.json",
+            "data/dashboard/daily-digest.json",
+            "data/dashboard/market.json",
+        )
     ]
     if not relevant:
         logger.info(f"No dashboard JSON changes in {repo} — skipping commit/push")
@@ -435,16 +596,22 @@ def export_dashboard(db: Session, push: bool | None = None) -> Dict[str, Any]:
 
     listings_payload = _build_listings_payload(db)
     digest_payload = _build_digest_payload(db)
+    market_payload = _build_market_payload(db)
 
     _write_json(data_dir / "data.json", listings_payload)
     _write_json(data_dir / "daily-digest.json", digest_payload)
+    _write_json(data_dir / "market.json", market_payload)
 
     summary = {
         "ok": True,
         "listings": listings_payload["stats"]["totalListings"],
         "deals": listings_payload["stats"]["totalDeals"],
         "neighborhoods": len(listings_payload["neighborhoods"]),
-        "wrote": ["data/dashboard/data.json", "data/dashboard/daily-digest.json"],
+        "wrote": [
+            "data/dashboard/data.json",
+            "data/dashboard/daily-digest.json",
+            "data/dashboard/market.json",
+        ],
         "pushed": False,
     }
     logger.info(
