@@ -1,11 +1,4 @@
-"""Scraper for homes.bg via their JSON API.
-
-API: https://www.homes.bg/api/offers?page=N (20 results/page, 11K+ total)
-No HTML parsing needed — clean structured JSON.
-
-Pagination Fix: The API uses 'from' parameter for offset-based pagination
-instead of 'page'. We calculate offset as (page-1) * 20.
-"""
+"""Scraper for homes.bg via the JSON API used by its Sofia search page."""
 
 import re
 import time
@@ -19,16 +12,54 @@ from src.config import EUR_BGN_RATE, SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX
 
 
 class HomesBgScraper:
-    """Scraper for homes.bg using their JSON API with fixed pagination."""
+    """Scrape the site's Sofia apartment-for-sale result set."""
     
     API_URL = "https://www.homes.bg/api/offers"
     BASE_URL = "https://www.homes.bg"
     RESULTS_PER_PAGE = 20
+    SEARCH_PARAMS = {
+        "typeId": "ApartmentSell",
+        "locationId": "1",  # Sofia in the site's search form.
+    }
     
     def __init__(self, max_pages: int = 50):
         # Intentional sample: ~1,000 of ~11k listings keeps nightly runtime down.
         self.max_pages = max_pages
         self.source_name = "homesbg"
+
+    @classmethod
+    def _request_params(cls, page: int) -> Dict[str, Any]:
+        """Build the pagination query used by the Homes.bg infinite-scroll client."""
+        start_index = (page - 1) * cls.RESULTS_PER_PAGE
+        return {
+            **cls.SEARCH_PARAMS,
+            "startIndex": start_index,
+            "stopIndex": start_index + cls.RESULTS_PER_PAGE - 1,
+        }
+
+    @staticmethod
+    def _api_total_count(data: Dict[str, Any]) -> Optional[int]:
+        """Read the matching-offer count across known API response variants."""
+        for key in ("offersCount", "totalCount", "count"):
+            value = data.get(key)
+            if isinstance(value, int):
+                return value
+        return None
+
+    @classmethod
+    def _api_is_exhausted(
+        cls,
+        data: Dict[str, Any],
+        *,
+        raw_result_count: int,
+        stop_index: int,
+    ) -> bool:
+        """Decide exhaustion from API metadata, never from parsed Sofia matches."""
+        if raw_result_count == 0 or data.get("hasMoreItems") is False:
+            return True
+
+        total_count = cls._api_total_count(data)
+        return total_count is not None and stop_index + 1 >= total_count
     
     def _parse_listing(self, item: dict) -> Optional[Dict[str, Any]]:
         """Parse a single listing from the API response."""
@@ -167,9 +198,10 @@ class HomesBgScraper:
             return None
     
     def scrape(self) -> List[Dict[str, Any]]:
-        """Scrape Sofia listings from homes.bg API with fixed offset-based pagination."""
+        """Scrape Sofia listings from the search API's indexed result window."""
         all_listings = []
         seen_ids = set()
+        api_total_count = None
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
@@ -178,34 +210,34 @@ class HomesBgScraper:
         }
         
         page = 1
-        consecutive_empty = 0
-        max_consecutive_empty = 3
-        
-        while page <= self.max_pages and consecutive_empty < max_consecutive_empty:
-            # Use offset-based pagination instead of page number
-            # API uses 'from' parameter for offset
-            offset = (page - 1) * self.RESULTS_PER_PAGE
-            url = f"{self.API_URL}?from={offset}"
-            
-            logger.info(f"Scraping homes.bg API page {page} (offset={offset}): {url}")
+        while page <= self.max_pages:
+            params = self._request_params(page)
+            logger.info(
+                f"Scraping homes.bg Sofia API page {page} "
+                f"(results {params['startIndex']}-{params['stopIndex']})"
+            )
             
             # Rate limit
             time.sleep(random.uniform(SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX))
             
             try:
-                resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=30)
+                resp = httpx.get(
+                    self.API_URL,
+                    params=params,
+                    headers=headers,
+                    follow_redirects=True,
+                    timeout=30,
+                )
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as e:
                 logger.error(f"Failed to fetch homes.bg page {page}: {e}")
                 break
             
-            results = data.get('result', [])
-            if not results:
-                logger.info(f"No results on page {page}, consecutive_empty={consecutive_empty+1}")
-                consecutive_empty += 1
-                page += 1
-                continue
+            results = data.get('result') or []
+            reported_total = self._api_total_count(data)
+            if reported_total is not None:
+                api_total_count = reported_total
             
             page_count = 0
             for item in results:
@@ -216,24 +248,28 @@ class HomesBgScraper:
                     page_count += 1
             
             logger.info(f"Page {page}: {page_count} Sofia listings (total: {len(all_listings)})")
-            
-            if page_count == 0:
-                consecutive_empty += 1
-            else:
-                consecutive_empty = 0
-            
-            # Check if more pages available - use total count if available
-            total_count = data.get('totalCount') or data.get('count', 0)
-            if total_count and offset + len(results) >= total_count:
-                logger.info(f"Reached end of results ({total_count} total)")
-                break
-            
-            # Alternative: check hasMoreItems flag
-            if not data.get('hasMoreItems', True) and page_count == 0:
-                logger.info("No more pages available (hasMoreItems=false)")
+
+            if results and page_count == 0:
+                logger.warning(
+                    f"Homes.bg page {page} returned {len(results)} API results but "
+                    "none passed Sofia parsing; continuing according to API pagination"
+                )
+
+            if self._api_is_exhausted(
+                data,
+                raw_result_count=len(results),
+                stop_index=params["stopIndex"],
+            ):
+                logger.info(
+                    "Reached end of homes.bg API results "
+                    f"(reported total: {api_total_count if api_total_count is not None else 'unknown'})"
+                )
                 break
             
             page += 1
         
-        logger.info(f"Total: scraped {len(all_listings)} Sofia listings from homes.bg")
+        logger.info(
+            f"Homes.bg API reported {api_total_count if api_total_count is not None else 'unknown'} "
+            f"Sofia apartment listings; scraped {len(all_listings)}"
+        )
         return all_listings
