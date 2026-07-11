@@ -83,7 +83,10 @@ def test_detection_falls_back_to_property_type_group():
     assert anomalies[0].group_count == 8
 
 
-def test_detection_falls_back_to_neighborhood_wide_group():
+def test_detection_never_compares_across_property_types():
+    # TIN-468: a house/plot with no same-type peers must NOT be scored
+    # against the mixed neighborhood-wide pool (that flagged €71/m² plots
+    # as −100% "deals" vs apartments). No same-type group → no anomaly.
     underpriced = listing(500, property_type="house", construction_type=None)
     stats = {
         ("Люлин", "all", "all"): {
@@ -99,8 +102,28 @@ def test_detection_falls_back_to_neighborhood_wide_group():
 
     anomalies = detect_anomalies([underpriced], stats)
 
+    assert anomalies == []
+
+
+def test_detection_scores_plots_against_plot_peers():
+    # Plots ARE eligible for deals — against other plots in the same hood.
+    underpriced = listing(50, property_type="plot", construction_type=None)
+    stats = {
+        ("Люлин", "plot", "all"): {
+            "mean": 120,
+            "median": 115,
+            "std": 25,
+            "p20": 95,
+            "count": 6,
+            "min": 50,
+            "max": 160,
+        }
+    }
+
+    anomalies = detect_anomalies([underpriced], stats)
+
     assert len(anomalies) == 1
-    assert anomalies[0].group_count == 12
+    assert anomalies[0].group_count == 6
 
 
 def test_analyze_database_excludes_active_duplicate_listings():

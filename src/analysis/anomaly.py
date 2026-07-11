@@ -115,12 +115,14 @@ def detect_anomalies(
         
         construction = listing.construction_type or 'unknown'
         
-        # Try most precise group first, then fall back
+        # Try most precise group first, then fall back — but never across
+        # property types (TIN-468): the old (hood, 'all', 'all') fallback
+        # compared plots/houses against apartment-dominated pools, flagging
+        # a €71/m² field as a "−100% deal". A listing with no same-type
+        # peers in its neighborhood simply gets no z-score.
         key = (listing.neighborhood, listing.property_type, construction)
         if key not in stats:
             key = (listing.neighborhood, listing.property_type, 'all')
-        if key not in stats:
-            key = (listing.neighborhood, 'all', 'all')
         if key not in stats:
             continue
         
