@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from loguru import logger
+from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from src.config import DASHBOARD_REPO_PATH, DASHBOARD_DATA_DIR, DASHBOARD_AUTO_PUSH
@@ -55,6 +56,16 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         )
         .all()
     )
+    site_counts = dict(
+        db.query(Listing.canonical_id, func.count(func.distinct(Listing.source)))
+        .filter(Listing.canonical_id.isnot(None))
+        .filter(
+            (Listing.is_active.is_(True))
+            | (Listing.last_seen >= cutoff)
+        )
+        .group_by(Listing.canonical_id)
+        .all()
+    )
 
     listings: List[Dict[str, Any]] = []
     for l in rows:
@@ -77,6 +88,10 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                         else None
                     ),
                     "construction_type": l.construction_type,
+                    "floor": l.floor,
+                    "total_floors": l.total_floors,
+                    "price_changes": l.price_changes or 0,
+                    "site_count": site_counts.get(l.canonical_id, 1),
                     # zscore + savings_pct are computed during analysis but stored on
                     # the Alert, not the Listing. The dashboard's anomaly highlighting
                     # uses the latest underpriced alert per listing.
@@ -105,6 +120,11 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
             "neighborhood": h.name,
             "listingCount": h.listing_count or 0,
             "avgPricePerSqm": round(float(h.avg_price_per_sqm), 2),
+            "medianPricePerSqm": (
+                round(float(h.median_price_per_sqm), 2)
+                if h.median_price_per_sqm is not None
+                else None
+            ),
         }
         for h in hoods
     ]

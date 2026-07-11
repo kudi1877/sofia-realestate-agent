@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from src.database.models import Alert, Base, Listing, PriceHistory
+from src.database.models import Alert, Base, Listing, Neighborhood, PriceHistory
 from src.exporters.dashboard import _build_digest_payload, _build_listings_payload, _write_json
 from src.utils.time import utc_now
 
@@ -25,9 +25,12 @@ def listing(source_id):
         neighborhood="Люлин",
         property_type="apartment",
         rooms=2,
+        floor=3,
+        total_floors=8,
         area_sqm=50,
         price_eur=100000,
         price_per_sqm_eur=2000,
+        price_changes=1,
         is_active=True,
         is_duplicate=False,
         first_seen=datetime(2026, 1, 1),
@@ -82,8 +85,10 @@ def test_build_listings_payload_eager_loads_alerts_and_preserves_latest_values()
     assert by_source["export-2"]["zscore"] == -1.75
     assert by_source["export-2"]["savings_pct"] == 8.2
     assert by_source["export-1"]["image_url"] == "https://images.example.test/export-1.jpg"
-    assert "floor" not in by_source["export-1"]
-    assert "total_floors" not in by_source["export-1"]
+    assert by_source["export-1"]["floor"] == 3
+    assert by_source["export-1"]["total_floors"] == 8
+    assert by_source["export-1"]["price_changes"] == 1
+    assert by_source["export-1"]["site_count"] == 1
     assert "last_seen" not in by_source["export-1"]
     assert alert_selects == 1
 
@@ -105,6 +110,35 @@ def test_build_listings_payload_omits_none_listing_values():
     assert "zscore" not in item
     assert "savings_pct" not in item
     assert "image_url" not in item
+
+
+def test_build_listings_payload_counts_canonical_sibling_sources_and_exports_median():
+    _engine, db = session()
+    primary = listing("primary")
+    primary.canonical_id = "canonical-group"
+    duplicate = listing("duplicate")
+    duplicate.source = "other"
+    duplicate.canonical_id = "canonical-group"
+    duplicate.is_duplicate = True
+    db.add_all(
+        [
+            primary,
+            duplicate,
+            Neighborhood(
+                name="Люлин",
+                avg_price_per_sqm=2100,
+                median_price_per_sqm=2050,
+                listing_count=2,
+            ),
+        ]
+    )
+    db.commit()
+
+    payload = _build_listings_payload(db)
+
+    assert len(payload["listings"]) == 1
+    assert payload["listings"][0]["site_count"] == 2
+    assert payload["neighborhoods"][0]["medianPricePerSqm"] == 2050.0
 
 
 def test_write_json_uses_compact_separators(tmp_path):
