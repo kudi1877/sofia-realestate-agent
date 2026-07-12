@@ -80,6 +80,27 @@ def test_upsert_commit_false_preserves_price_history_rows():
     assert [row.price_eur for row in history] == [100000, 100000]
 
 
+def test_upsert_ignores_non_column_metadata_keys():
+    # Dedup attaches 'duplicate_sources' (a list) to winner dicts; creating a
+    # NEW listing via Listing(**data) raised TypeError on it and killed nearly
+    # every save on the 2026-07-12 nightly run. upsert must filter such keys.
+    db = session()
+    repo = ListingRepository(db)
+
+    created = repo.upsert(
+        listing_data(source_id="winner-1", duplicate_sources=["homesbg", "imotinet"])
+    )
+    assert created.id is not None
+    assert created.price_eur == 100000
+
+    # Existing-row path must tolerate it too.
+    updated = repo.upsert(
+        listing_data(source_id="winner-1", price_eur=99000, price_per_sqm_eur=1980,
+                     duplicate_sources=["homesbg"])
+    )
+    assert updated.price_eur == 99000
+
+
 def test_mark_stale_inactive_as_sold_respects_age_and_active_thresholds():
     db = session()
     repo = ListingRepository(db)

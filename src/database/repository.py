@@ -29,8 +29,14 @@ class ListingRepository:
     
     def upsert(self, listing_data: Dict[str, Any], commit: bool = True) -> Listing:
         """Insert or update a listing."""
+        # Drop keys that aren't Listing attributes — dedup attaches metadata
+        # like 'duplicate_sources' to winner dicts, and Listing(**data) raises
+        # TypeError on unknown kwargs (killed ~all new-listing saves on the
+        # 2026-07-12 nightly run; only 30 of 7,730 scraped rows saved).
+        listing_data = {k: v for k, v in listing_data.items() if hasattr(Listing, k)}
+
         existing = self.get_by_source_id(
-            listing_data["source"], 
+            listing_data["source"],
             listing_data["source_id"]
         )
         
