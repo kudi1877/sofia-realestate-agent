@@ -87,6 +87,13 @@ def cmd_scrape(recorder=None):
                 ))
                 recorder.add_error(f"{display_name}: {str(e)[:200]}")
     
+    # Canonicalize neighborhood names before dedup/stats (TIN-468): merges
+    # imoti.net's Latin slugs ("Bankja") and prefixed variants ("гр. Банкя")
+    # into one canonical Cyrillic group per place.
+    from src.utils.neighborhoods import canonicalize_neighborhood
+    for listing in all_listings:
+        listing['neighborhood'] = canonicalize_neighborhood(listing.get('neighborhood'))
+
     # Deduplicate listings before saving
     logger.info(f"Total raw listings: {len(all_listings)}")
     dedup_result = deduplicate_listings(all_listings)
