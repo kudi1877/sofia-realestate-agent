@@ -73,6 +73,14 @@ class Listing(Base):
     image_urls = Column(Text)
     image_count = Column(Integer)
     enriched_at = Column(DateTime)
+    exposure = Column(Text)
+    renovation_state = Column(String(30))
+    act16 = Column(Boolean)
+    has_elevator = Column(Boolean)
+    parking = Column(String(30))
+    llm_extract = Column(Text)
+    llm_extracted_at = Column(DateTime)
+    llm_model_used = Column(String(100))
     
     # Price tracking
     first_price_eur = Column(Float)
@@ -242,6 +250,14 @@ def init_db():
             ("image_urls", "TEXT"),
             ("image_count", "INTEGER"),
             ("enriched_at", "DATETIME"),
+            ("exposure", "TEXT"),
+            ("renovation_state", "VARCHAR(30)"),
+            ("act16", "BOOLEAN"),
+            ("has_elevator", "BOOLEAN"),
+            ("parking", "VARCHAR(30)"),
+            ("llm_extract", "TEXT"),
+            ("llm_extracted_at", "DATETIME"),
+            ("llm_model_used", "VARCHAR(100)"),
         ],
     }
 

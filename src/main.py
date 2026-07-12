@@ -635,6 +635,20 @@ def cmd_full():
             finally:
                 detail_db.close()
 
+        with rec.step("llm_extraction"):
+            from src.enrichment.llm_extract import extract_listing_attributes
+
+            llm_db = get_db()
+            try:
+                llm_summary = extract_listing_attributes(llm_db)
+                logger.info(
+                    f"LLM extraction: provider={llm_summary['provider']}, "
+                    f"extracted={llm_summary['extracted']}, failed={llm_summary['failed']}, "
+                    f"spent=${llm_summary['spent_usd']:.4f}"
+                )
+            finally:
+                llm_db.close()
+
         with rec.step("seller_signals"):
             from src.analysis.seller_signals import update_motivated_scores
 

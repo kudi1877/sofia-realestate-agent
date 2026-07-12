@@ -30,6 +30,21 @@ DATA_HEALTH_IMAGE_ERROR_PCT = float(os.getenv("DATA_HEALTH_IMAGE_ERROR_PCT", "30
 ENRICH_MAX_PER_RUN = int(os.getenv("ENRICH_MAX_PER_RUN", "500"))
 ENRICH_DELAY_SECONDS = float(os.getenv("ENRICH_DELAY_SECONDS", "2.0"))
 
+# LLM extraction defaults off when no Anthropic key is configured. An
+# explicit local provider remains available without an API key.
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+_llm_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+LLM_PROVIDER = _llm_provider or ("anthropic" if ANTHROPIC_API_KEY else "off")
+if LLM_PROVIDER == "anthropic" and not ANTHROPIC_API_KEY:
+    LLM_PROVIDER = "off"
+ANTHROPIC_LLM_MODEL = os.getenv("ANTHROPIC_LLM_MODEL", "claude-haiku-4-5")
+LOCAL_LLM_BASE_URL = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1")
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen2.5:7b")
+LLM_MAX_PER_RUN = int(os.getenv("LLM_MAX_PER_RUN", "300"))
+LLM_DAILY_BUDGET_USD = float(os.getenv("LLM_DAILY_BUDGET_USD", "2"))
+ANTHROPIC_INPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_INPUT_USD_PER_MTOK", "1"))
+ANTHROPIC_OUTPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_OUTPUT_USD_PER_MTOK", "5"))
+
 # Sanity floor: nothing in Sofia genuinely sells below this — prices under it
 # are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).
 MIN_PRICE_EUR = float(os.getenv("MIN_PRICE_EUR", "5000"))

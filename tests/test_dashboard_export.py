@@ -49,6 +49,11 @@ def listing(source_id):
         last_seen=datetime(2026, 1, 2),
         availability_checked_at=datetime(2026, 1, 2, 12, 30),
         motivated_score=67,
+        exposure='["south", "east"]',
+        renovation_state="renovated",
+        act16=True,
+        has_elevator=False,
+        parking="parking_space",
     )
 
 
@@ -106,6 +111,11 @@ def test_build_listings_payload_eager_loads_alerts_and_preserves_latest_values()
     assert by_source["export-1"]["last_seen"] == "2026-01-02T00:00:00"
     assert by_source["export-1"]["availability_checked_at"] == "2026-01-02T12:30:00"
     assert by_source["export-1"]["motivated_score"] == 67
+    assert by_source["export-1"]["exposure"] == ["south", "east"]
+    assert by_source["export-1"]["renovation_state"] == "renovated"
+    assert by_source["export-1"]["act16"] is True
+    assert by_source["export-1"]["has_elevator"] is False
+    assert by_source["export-1"]["parking"] == "parking_space"
     assert alert_selects == 1
 
 

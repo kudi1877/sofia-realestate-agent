@@ -175,6 +175,11 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     # means we haven't seen it for ≥1 scrape but it's within 30d.
                     "is_active": bool(l.is_active),
                     "motivated_score": int(l.motivated_score or 0),
+                    "exposure": json.loads(l.exposure) if l.exposure else None,
+                    "renovation_state": l.renovation_state,
+                    "act16": l.act16,
+                    "has_elevator": l.has_elevator,
+                    "parking": l.parking,
                 }
             )
         )
