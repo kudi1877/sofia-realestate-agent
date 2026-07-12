@@ -69,6 +69,7 @@ class Listing(Base):
     is_sold = Column(Boolean, default=False)
     sold_date = Column(DateTime)
     days_on_market = Column(Integer)
+    motivated_score = Column(Integer)
     
     # Metadata
     first_seen = Column(DateTime, default=func.now())
@@ -218,6 +219,7 @@ def init_db():
             ("days_on_market", "INTEGER"),
             ("image_url", "TEXT"),
             ("availability_checked_at", "DATETIME"),
+            ("motivated_score", "INTEGER"),
         ],
     }
 

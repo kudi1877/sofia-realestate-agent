@@ -616,6 +616,19 @@ def cmd_full():
                 availability_db.close()
         rec.set_availability(**availability)
 
+        with rec.step("seller_signals"):
+            from src.analysis.seller_signals import update_motivated_scores
+
+            signals_db = get_db()
+            try:
+                score_summary = update_motivated_scores(signals_db)
+                logger.info(
+                    f"Seller signals: scored {score_summary['scored']} active listings; "
+                    f"{score_summary['motivated']} motivated sellers"
+                )
+            finally:
+                signals_db.close()
+
         # Step 2: Analyze (recompute z-scores; produce alerts)
         with rec.step("analyze"):
             anomalies = cmd_analyze()

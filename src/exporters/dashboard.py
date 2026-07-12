@@ -36,6 +36,7 @@ from src.config import (
 )
 from src.analysis.anomaly import calculate_neighborhood_stats
 from src.analysis.imotbg_benchmark import fetch_benchmark
+from src.analysis.seller_signals import calculate_market_signals, market_pulse_line
 from src.database.models import Listing, Neighborhood, NeighborhoodStatsHistory
 from src.utils.git import changed_files, commit_and_push
 from src.utils.time import utc_now
@@ -172,6 +173,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     # source site (we re-confirmed it in the latest scrape). False
                     # means we haven't seen it for ≥1 scrape but it's within 30d.
                     "is_active": bool(l.is_active),
+                    "motivated_score": int(l.motivated_score or 0),
                 }
             )
         )
@@ -281,9 +283,13 @@ def _latest_alert_values_for_listing(l: Listing) -> tuple[float | None, float | 
 # ── Market analytics JSON ────────────────────────────────────────────────────
 
 
-def _build_market_payload(db: Session) -> Dict[str, Any]:
+def _build_market_payload(
+    db: Session,
+    seller_signals: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Build median-first, pre-aggregated market analytics for the dashboard."""
     now = utc_now()
+    seller_signals = seller_signals or calculate_market_signals(db, now=now)
     unique_clause = (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None))
     active_rows = db.query(Listing).filter(
         Listing.is_active.is_(True),
@@ -361,6 +367,7 @@ def _build_market_payload(db: Session) -> Dict[str, Any]:
                     else "insufficient history"
                 ),
                 "history": history,
+                **seller_signals["neighborhoods"].get(hood.name, {}),
             }
         )
 
@@ -388,6 +395,7 @@ def _build_market_payload(db: Session) -> Dict[str, Any]:
             "new_this_week": new_this_week,
             "price_drops": price_drops,
             "off_market": off_market,
+            **seller_signals["city"],
         },
         "neighborhoods": sorted(
             neighborhoods,
@@ -430,6 +438,7 @@ def _snapshot_trend_pct(history: List[Dict[str, Any]], days: int) -> float | Non
 def _build_digest_payload(
     db: Session,
     deals_by_hood: Dict[str, int] | None = None,
+    seller_signals: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build daily-digest.json in the schema the dashboard's DailyDigest tab expects.
 
@@ -464,6 +473,7 @@ def _build_digest_payload(
     from src.analysis.trends import detect_price_drops, generate_market_summary
 
     market_summary = generate_market_summary(db)
+    seller_signals = seller_signals or calculate_market_signals(db)
     price_drops = [
         _dashboard_price_drop(drop)
         for drop in detect_price_drops(db)[:8]
@@ -485,6 +495,7 @@ def _build_digest_payload(
             for h in (ctx.get("hot_districts") or [])
         ],
         "top_pick":      _dashboard_deal(ctx.get("top_pick")) if ctx.get("top_pick") else None,
+        "market_pulse":  market_pulse_line(seller_signals["city"]),
     }
 
 
@@ -493,6 +504,7 @@ def _empty_digest() -> Dict[str, Any]:
         "generated_at": utc_now().isoformat(),
         "summary": {"total_active": 0, "off_market": 0, "new_today": 0, "price_drops": 0, "hot_deals": 0},
         "new_deals": [], "price_drops": [], "hot_districts": [], "top_pick": None,
+        "market_pulse": "Market pulse: insufficient weekly history.",
     }
 
 
@@ -718,8 +730,9 @@ def export_dashboard(db: Session, push: bool | None = None) -> Dict[str, Any]:
         if item.get("is_deal") and item.get("neighborhood"):
             deals_by_hood[item["neighborhood"]] += 1
 
-    digest_payload = _build_digest_payload(db, dict(deals_by_hood))
-    market_payload = _build_market_payload(db)
+    seller_signals = calculate_market_signals(db)
+    digest_payload = _build_digest_payload(db, dict(deals_by_hood), seller_signals)
+    market_payload = _build_market_payload(db, seller_signals)
     _attach_imotbg_benchmark(market_payload)
 
     _write_json(data_dir / "data.json", listings_payload)
