@@ -19,12 +19,16 @@ from src.scrapers.imotiinfo import ImotiInfoScraper
 from src.scrapers.imotinet import ImotiNetScraper
 from src.scrapers.propertybg import PropertyBGScraper
 from src.scrapers.bcpea import BCPEAScraper
+from src.scrapers.olx import OlxScraper
+from src.scrapers.bazar import BazarScraper
+from src.scrapers.alo import AloScraper
 from src.analysis.anomaly import analyze_database, calculate_neighborhood_stats
 from src.analysis.trends import calculate_neighborhood_trends, generate_market_summary
 from src.analysis.rental_market import update_neighborhood_rent_stats
 from src.alerts.telegram import should_send_alert
 from src.config import (
     AUTHENTICITY_DEAL_MIN_SCORE,
+    OLX_ENABLED,
     MARK_INACTIVE_MIN_RATIO,
     MIN_PRICE_EUR,
     MIN_RENT_EUR,
@@ -72,8 +76,16 @@ def cmd_scrape(recorder=None):
         ("imoti.info",  "imotiinfo",  lambda: ImotiInfoScraper()),
         ("imoti.net",   "imotinet",   lambda: ImotiNetScraper()),
         ("property.bg", "propertybg", lambda: PropertyBGScraper()),
-        ("ЧСИ auctions", "bcpea", lambda: BCPEAScraper()),
     ]
+    if OLX_ENABLED:
+        SCRAPERS.append(("olx.bg", "olx", lambda: OlxScraper()))
+    SCRAPERS.extend(
+        [
+            ("bazar.bg", "bazar", lambda: BazarScraper()),
+            ("alo.bg", "alo", lambda: AloScraper()),
+            ("ЧСИ auctions", "bcpea", lambda: BCPEAScraper()),
+        ]
+    )
 
     for display_name, source_key, factory in SCRAPERS:
         t0 = _time.time()

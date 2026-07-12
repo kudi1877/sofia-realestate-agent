@@ -61,6 +61,13 @@ IMAGE_HASH_CACHE_PATH = Path(
 ).expanduser()
 AUTHENTICITY_DEAL_MIN_SCORE = int(os.getenv("AUTHENTICITY_DEAL_MIN_SCORE", "50"))
 
+# FSBO/general-classified portals. OLX is enabled because its observed Sofia
+# JSON API is reachable without Cloudflare workarounds.
+OLX_ENABLED = os.getenv("OLX_ENABLED", "1").lower() not in ("0", "false", "no", "")
+OLX_MAX_PAGES = int(os.getenv("OLX_MAX_PAGES", "10"))
+BAZAR_MAX_PAGES = int(os.getenv("BAZAR_MAX_PAGES", "3"))
+ALO_MAX_PAGES = int(os.getenv("ALO_MAX_PAGES", "10"))
+
 # Sanity floor: nothing in Sofia genuinely sells below this — prices under it
 # are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).
 MIN_PRICE_EUR = float(os.getenv("MIN_PRICE_EUR", "5000"))

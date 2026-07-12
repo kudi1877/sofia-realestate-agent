@@ -32,6 +32,9 @@ SOURCE_KEYS = {
     "imoti.info": "imotiinfo",
     "imoti.net": "imotinet",
     "property.bg": "propertybg",
+    "olx.bg": "olx",
+    "bazar.bg": "bazar",
+    "alo.bg": "alo",
 }
 
 
