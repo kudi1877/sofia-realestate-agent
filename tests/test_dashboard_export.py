@@ -436,6 +436,14 @@ def test_digest_exports_recent_price_drop_with_old_and_new_prices(monkeypatch):
     auction.auction_end = utc_now() + timedelta(days=20)
     auction.bailiff_name = "Test Bailiff"
     db.add(auction)
+    municipal = listing("municipal-auction")
+    municipal.source = "municipal"
+    municipal.listing_kind = "auction"
+    municipal.first_seen = utc_now()
+    municipal.auction_start = utc_now()
+    municipal.auction_end = utc_now() + timedelta(days=25)
+    municipal.bailiff_name = "СОАПИ"
+    db.add(municipal)
     db.flush()
     db.add(
         PriceHistory(
@@ -458,8 +466,8 @@ def test_digest_exports_recent_price_drop_with_old_and_new_prices(monkeypatch):
     payload = _build_digest_payload(db)
 
     assert payload["summary"]["price_drops"] == 1
-    assert len(payload["auction_watch"]) == 1
-    assert payload["auction_watch"][0]["source"] == "bcpea"
+    assert len(payload["auction_watch"]) == 2
+    assert {row["source"] for row in payload["auction_watch"]} == {"bcpea", "municipal"}
     assert payload["price_drops"] == [
         {
             "id": row.id,

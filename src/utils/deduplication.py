@@ -28,6 +28,7 @@ SOURCE_PRIORITY = {
     'bazar': 7,
     'alo': 8,
     'bcpea': 9,
+    'municipal': 10,
 }
 
 

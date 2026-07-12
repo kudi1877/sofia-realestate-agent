@@ -73,6 +73,10 @@ ALO_MAX_PAGES = int(os.getenv("ALO_MAX_PAGES", "10"))
 MIN_PRICE_EUR = float(os.getenv("MIN_PRICE_EUR", "5000"))
 MIN_RENT_EUR = float(os.getenv("MIN_RENT_EUR", "100"))
 BCPEA_MAX_DETAIL_FETCHES = int(os.getenv("BCPEA_MAX_DETAIL_FETCHES", "20"))
+MUNICIPAL_WATCH_WEEKDAY = int(os.getenv("MUNICIPAL_WATCH_WEEKDAY", "0"))
+MUNICIPAL_MAX_PAGES = int(os.getenv("MUNICIPAL_MAX_PAGES", "3"))
+MUNICIPAL_MAX_NOTICES_PER_RUN = int(os.getenv("MUNICIPAL_MAX_NOTICES_PER_RUN", "20"))
+MUNICIPAL_DELAY_SECONDS = float(os.getenv("MUNICIPAL_DELAY_SECONDS", "1.5"))
 
 # Published neighborhood medians below this €/m² are land-dominated blends,
 # not residential prices — suppress rather than publish (TIN-476).

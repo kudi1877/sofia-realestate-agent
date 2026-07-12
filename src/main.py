@@ -653,7 +653,7 @@ def cmd_full():
     on the dashboard. Status.json is pushed at start and end so the dashboard's
     StatusBadge can show "running" vs "idle" + last summary.
     """
-    from src.observability import RunRecorder, write_status, append_run
+    from src.observability import RunRecorder, SourceResult, write_status, append_run
 
     logger.info("Running full pipeline...")
 
@@ -671,6 +671,32 @@ def cmd_full():
         # Step 1: Scrape (recorder collects per-source results)
         with rec.step("scrape"):
             scraped = cmd_scrape(recorder=rec)
+
+        with rec.step("municipal_watcher"):
+            from src.scrapers.municipal import run_municipal_watcher
+
+            municipal_db = get_db()
+            try:
+                municipal_summary = run_municipal_watcher(municipal_db)
+            finally:
+                municipal_db.close()
+            if municipal_summary.get("skipped") != "weekday_gate":
+                municipal_errors = municipal_summary.get("errors") or []
+                rec.add_source(
+                    SourceResult(
+                        name="Municipal notices",
+                        scraped=int(municipal_summary.get("listings_created", 0)),
+                        status="partial" if municipal_errors else "ok",
+                        error="; ".join(municipal_errors)[:200] or None,
+                    )
+                )
+                for error in municipal_errors:
+                    rec.add_error(f"Municipal notices: {error[:200]}")
+                logger.info(
+                    f"Municipal watcher: {municipal_summary['new_notices']} new notices, "
+                    f"{municipal_summary['listings_created']} auction listings, "
+                    f"{municipal_summary['pending']} pending"
+                )
 
         # Confirm selected high-value/recent ads directly without touching
         # last_seen, whose meaning remains "observed in a search scrape".

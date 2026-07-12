@@ -234,6 +234,31 @@ class NeighborhoodRentStatsHistory(Base):
     )
 
 
+class SeenNotice(Base):
+    """Municipal notice ledger used to diff weekly public-sale feeds."""
+
+    __tablename__ = "seen_notices"
+
+    id = Column(Integer, primary_key=True)
+    source = Column(String(30), nullable=False)
+    source_id = Column(String(100), nullable=False)
+    title = Column(Text, nullable=False)
+    notice_date = Column(DateTime)
+    url = Column(Text, nullable=False)
+    pdf_url = Column(Text)
+    is_residential = Column(Boolean, nullable=False, default=False)
+    first_seen = Column(DateTime, nullable=False, default=func.now())
+    processed_at = Column(DateTime)
+    listing_id = Column(Integer, ForeignKey("listings.id"))
+    extraction_json = Column(Text)
+    last_error = Column(Text)
+
+    __table_args__ = (
+        Index("idx_seen_notices_source_id", "source", "source_id", unique=True),
+        Index("idx_seen_notices_pending", "is_residential", "processed_at"),
+    )
+
+
 class Alert(Base):
     """Alert tracking for deals."""
     
