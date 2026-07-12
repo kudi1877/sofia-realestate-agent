@@ -210,6 +210,18 @@ class ListingRepository:
         self.db.commit()
         return len(stale)
 
+    def expire_auctions(self, now=None) -> int:
+        """Deactivate auctions once their published bidding window closes."""
+        now = now or utc_now()
+        result = self.db.query(Listing).filter(
+            Listing.listing_kind == "auction",
+            Listing.is_active.is_(True),
+            Listing.auction_end.isnot(None),
+            Listing.auction_end < now,
+        ).update({"is_active": False}, synchronize_session=False)
+        self.db.commit()
+        return result
+
     def count_off_market(self) -> int:
         """Count unique listings inferred to have left the market."""
         return self.db.query(func.count(Listing.id)).filter(

@@ -146,10 +146,18 @@ def test_listings_payload_excludes_rentals_and_exports_sale_gross_yield():
     rental.listing_kind = "rent"
     rental.price_eur = 500
     rental.price_per_sqm_eur = 10
+    auction = listing("auction-visible")
+    auction.source = "bcpea"
+    auction.listing_kind = "auction"
+    auction.auction_start = datetime(2026, 7, 1)
+    auction.auction_end = datetime(2026, 8, 1, 23, 59, 59)
+    auction.bailiff_name = "Test Bailiff"
+    auction.case_number = "20260001"
     db.add_all(
         [
             sale,
             rental,
+            auction,
             NeighborhoodRentStats(
                 neighborhood="Люлин",
                 rooms_bucket="2",
@@ -162,9 +170,15 @@ def test_listings_payload_excludes_rentals_and_exports_sale_gross_yield():
 
     payload = _build_listings_payload(db)
 
-    assert [row["source_id"] for row in payload["listings"]] == ["sale-yield"]
-    assert payload["listings"][0]["listing_kind"] == "sale"
-    assert payload["listings"][0]["gross_yield_pct"] == 6.0
+    by_id = {row["source_id"]: row for row in payload["listings"]}
+    assert set(by_id) == {"sale-yield", "auction-visible"}
+    assert payload["stats"]["totalListings"] == 1
+    assert by_id["sale-yield"]["gross_yield_pct"] == 6.0
+    assert by_id["auction-visible"]["listing_kind"] == "auction"
+    assert by_id["auction-visible"]["auction_end"] == "2026-08-01T23:59:59"
+    assert by_id["auction-visible"]["bailiff_name"] == "Test Bailiff"
+    assert by_id["auction-visible"]["is_deal"] is False
+    assert "zscore" not in by_id["auction-visible"]
 
 
 def test_dashboard_export_never_leaks_contact_fields_or_values():
@@ -335,6 +349,14 @@ def test_digest_exports_recent_price_drop_with_old_and_new_prices(monkeypatch):
     row.first_price_eur = 100000
     row.price_changes = 1
     db.add(row)
+    auction = listing("new-auction")
+    auction.source = "bcpea"
+    auction.listing_kind = "auction"
+    auction.first_seen = utc_now()
+    auction.auction_start = utc_now()
+    auction.auction_end = utc_now() + timedelta(days=20)
+    auction.bailiff_name = "Test Bailiff"
+    db.add(auction)
     db.flush()
     db.add(
         PriceHistory(
@@ -357,6 +379,8 @@ def test_digest_exports_recent_price_drop_with_old_and_new_prices(monkeypatch):
     payload = _build_digest_payload(db)
 
     assert payload["summary"]["price_drops"] == 1
+    assert len(payload["auction_watch"]) == 1
+    assert payload["auction_watch"][0]["source"] == "bcpea"
     assert payload["price_drops"] == [
         {
             "id": row.id,

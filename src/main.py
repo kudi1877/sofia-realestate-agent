@@ -18,6 +18,7 @@ from src.scrapers.homesbg import HomesBgScraper
 from src.scrapers.imotiinfo import ImotiInfoScraper
 from src.scrapers.imotinet import ImotiNetScraper
 from src.scrapers.propertybg import PropertyBGScraper
+from src.scrapers.bcpea import BCPEAScraper
 from src.analysis.anomaly import analyze_database, calculate_neighborhood_stats
 from src.analysis.trends import calculate_neighborhood_trends, generate_market_summary
 from src.analysis.rental_market import update_neighborhood_rent_stats
@@ -70,6 +71,7 @@ def cmd_scrape(recorder=None):
         ("imoti.info",  "imotiinfo",  lambda: ImotiInfoScraper()),
         ("imoti.net",   "imotinet",   lambda: ImotiNetScraper()),
         ("property.bg", "propertybg", lambda: PropertyBGScraper()),
+        ("ЧСИ auctions", "bcpea", lambda: BCPEAScraper()),
     ]
 
     for display_name, source_key, factory in SCRAPERS:
@@ -190,11 +192,14 @@ def cmd_scrape(recorder=None):
             logger.info(f"Marked {marked} {source} listings as inactive")
 
     newly_off_market = repo.mark_stale_inactive_as_sold(SOLD_AFTER_DAYS)
+    expired_auctions = repo.expire_auctions()
     off_market_count = repo.count_off_market()
     logger.info(
         f"Marked {newly_off_market} listings off market after {SOLD_AFTER_DAYS} days; "
         f"{off_market_count} off market in total"
     )
+    if expired_auctions:
+        logger.info(f"Expired {expired_auctions} auctions after their bidding window")
     if recorder is not None:
         recorder.set_off_market(
             total=off_market_count,

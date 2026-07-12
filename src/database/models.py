@@ -90,6 +90,10 @@ class Listing(Base):
     sold_date = Column(DateTime)
     days_on_market = Column(Integer)
     motivated_score = Column(Integer)
+    auction_start = Column(DateTime)
+    auction_end = Column(DateTime)
+    bailiff_name = Column(Text)
+    case_number = Column(String(100))
     
     # Metadata
     first_seen = Column(DateTime, default=func.now())
@@ -285,6 +289,10 @@ def init_db():
             ("image_url", "TEXT"),
             ("availability_checked_at", "DATETIME"),
             ("motivated_score", "INTEGER"),
+            ("auction_start", "DATETIME"),
+            ("auction_end", "DATETIME"),
+            ("bailiff_name", "TEXT"),
+            ("case_number", "VARCHAR(100)"),
             ("description_full", "TEXT"),
             ("address", "TEXT"),
             ("latitude", "FLOAT"),

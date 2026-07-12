@@ -74,6 +74,8 @@ def classify_response(source: str, requested_url: str, response: httpx.Response)
         sold_band = re.search(r'class=["\'][^"\']*band[^"\']*["\'][^>]*>\s*sold\s*<', text)
         if "outdated listing" in text and sold_band:
             return "gone"
+    elif source == "bcpea":
+        return "live"
     else:
         return "unknown"
 

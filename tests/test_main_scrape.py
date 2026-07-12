@@ -41,6 +41,9 @@ class FakeRepo:
     def count_off_market(self):
         return 0
 
+    def expire_auctions(self):
+        return 0
+
 
 class FakeScraper:
     def __init__(self, rows):
@@ -84,6 +87,7 @@ def test_cmd_scrape_upserts_unique_winners_and_flagged_duplicates(monkeypatch):
     )
     monkeypatch.setattr(main_module, "ImotiNetScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "PropertyBGScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "BCPEAScraper", lambda: FakeScraper([]))
 
     saved_count = main_module.cmd_scrape()
 
@@ -118,6 +122,7 @@ def test_cmd_scrape_skips_mark_inactive_for_partial_source(monkeypatch):
     monkeypatch.setattr(main_module, "ImotiInfoScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "ImotiNetScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "PropertyBGScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "BCPEAScraper", lambda: FakeScraper([]))
 
     main_module.cmd_scrape(recorder=recorder)
 
@@ -148,6 +153,7 @@ def test_cmd_scrape_marks_inactive_when_source_count_is_normal(monkeypatch):
     monkeypatch.setattr(main_module, "ImotiInfoScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "ImotiNetScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "PropertyBGScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "BCPEAScraper", lambda: FakeScraper([]))
 
     main_module.cmd_scrape()
 

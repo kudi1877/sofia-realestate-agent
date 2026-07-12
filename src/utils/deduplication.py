@@ -24,6 +24,7 @@ SOURCE_PRIORITY = {
     'propertybg': 5,  # Lowest priority
     'imotbg-rent': 2,
     'homesbg-rent': 3,
+    'bcpea': 6,
 }
 
 

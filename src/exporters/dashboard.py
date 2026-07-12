@@ -69,8 +69,8 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         db.query(Listing)
         .options(selectinload(Listing.alerts), selectinload(Listing.price_history))
         # The browser remains a sale product; rentals feed pre-aggregated rent
-        # and yield metrics below, avoiding incomparable monthly/card prices.
-        .filter(Listing.listing_kind == "sale")
+        # and yield metrics below. Auctions are exported into a dedicated view.
+        .filter(Listing.listing_kind.in_(("sale", "auction")))
         .filter((Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)))
         .filter(
             (Listing.is_active.is_(True))
@@ -80,7 +80,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     )
     sibling_rows = (
         db.query(Listing.canonical_id, Listing.source, Listing.url)
-        .filter(Listing.listing_kind == "sale")
+        .filter(Listing.listing_kind.in_(("sale", "auction")))
         .filter(Listing.canonical_id.isnot(None))
         .filter(
             (Listing.is_active.is_(True))
@@ -94,17 +94,19 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
 
     neighborhood_prices: Dict[str, List[float]] = defaultdict(list)
     for row in rows:
-        if row.neighborhood and row.price_per_sqm_eur is not None:
+        if row.listing_kind == "sale" and row.neighborhood and row.price_per_sqm_eur is not None:
             neighborhood_prices[row.neighborhood].append(float(row.price_per_sqm_eur))
     for prices in neighborhood_prices.values():
         prices.sort()
 
     # TIN-471: give EVERY listing a z-score, not just alert-flagged outliers.
     # Same-type groups only (tier 1→2, no cross-type fallback per TIN-468).
-    group_stats = calculate_neighborhood_stats([l for l in rows if l.is_active])
+    group_stats = calculate_neighborhood_stats(
+        [l for l in rows if l.is_active and l.listing_kind == "sale"]
+    )
 
     def _group_zscore(l: Listing) -> float | None:
-        if not l.price_per_sqm_eur or l.price_per_sqm_eur <= 0:
+        if l.listing_kind != "sale" or not l.price_per_sqm_eur or l.price_per_sqm_eur <= 0:
             return None
         construction = l.construction_type or "unknown"
         for key in (
@@ -119,15 +121,27 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     listings: List[Dict[str, Any]] = []
     rental_stats = rent_stats_lookup(db)
     for l in rows:
-        alert_zscore, savings_pct = _latest_alert_values_for_listing(l)
+        alert_zscore, savings_pct = (
+            _latest_alert_values_for_listing(l)
+            if l.listing_kind == "sale"
+            else (None, None)
+        )
         # is_deal is the single source of truth for deal badges/feeds: only
         # alert-qualified outliers. zscore alone no longer implies "deal".
-        is_deal = alert_zscore is not None and alert_zscore <= ANOMALY_ZSCORE_THRESHOLD
+        is_deal = (
+            l.listing_kind == "sale"
+            and alert_zscore is not None
+            and alert_zscore <= ANOMALY_ZSCORE_THRESHOLD
+        )
         zscore = alert_zscore if alert_zscore is not None else _group_zscore(l)
         source_links = links_by_canonical.get(l.canonical_id, {})
-        percentile = _price_percentile(
-            neighborhood_prices.get(l.neighborhood, []),
-            l.price_per_sqm_eur,
+        percentile = (
+            _price_percentile(
+                neighborhood_prices.get(l.neighborhood, []),
+                l.price_per_sqm_eur,
+            )
+            if l.listing_kind == "sale"
+            else None
         )
         listings.append(
             _omit_none_values(
@@ -141,6 +155,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     "canonical_id": l.canonical_id,
                     "url": l.url,
                     "image_url": l.image_url,
+                    "title": l.title,
                     "neighborhood": l.neighborhood,
                     "property_type": l.property_type,
                     "rooms": l.rooms,
@@ -188,6 +203,10 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     "is_active": bool(l.is_active),
                     "motivated_score": int(l.motivated_score or 0),
                     "gross_yield_pct": gross_yield_pct(l, rental_stats),
+                    "auction_start": l.auction_start.isoformat() if l.auction_start else None,
+                    "auction_end": l.auction_end.isoformat() if l.auction_end else None,
+                    "bailiff_name": l.bailiff_name,
+                    "case_number": l.case_number,
                     "exposure": json.loads(l.exposure) if l.exposure else None,
                     "renovation_state": l.renovation_state,
                     "act16": l.act16,
@@ -219,10 +238,11 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     ]
 
     # Aggregate stats.
-    total_listings = len(listings)
+    sale_listings = [item for item in listings if item.get("listing_kind") == "sale"]
+    total_listings = len(sale_listings)
     total_deals = sum(1 for l in listings if l.get("is_deal"))
     prices_per_sqm = [
-        l["price_per_sqm_eur"] for l in listings if l["price_per_sqm_eur"]
+        l["price_per_sqm_eur"] for l in sale_listings if l["price_per_sqm_eur"]
     ]
     avg_price_per_sqm = (
         round(sum(prices_per_sqm) / len(prices_per_sqm), 2) if prices_per_sqm else 0
@@ -514,6 +534,12 @@ def _build_digest_payload(
         _dashboard_price_drop(drop)
         for drop in detect_price_drops(db)[:8]
     ]
+    auction_cutoff = utc_now() - timedelta(hours=24)
+    auction_rows = db.query(Listing).filter(
+        Listing.listing_kind == "auction",
+        Listing.is_active.is_(True),
+        Listing.first_seen >= auction_cutoff,
+    ).order_by(Listing.auction_end, Listing.id).limit(8).all()
 
     return {
         "generated_at": utc_now().isoformat(),
@@ -532,6 +558,7 @@ def _build_digest_payload(
         ],
         "top_pick":      _dashboard_deal(ctx.get("top_pick")) if ctx.get("top_pick") else None,
         "market_pulse":  market_pulse_line(seller_signals["city"]),
+        "auction_watch": [_dashboard_auction(row) for row in auction_rows],
     }
 
 
@@ -540,6 +567,7 @@ def _empty_digest() -> Dict[str, Any]:
         "generated_at": utc_now().isoformat(),
         "summary": {"total_active": 0, "off_market": 0, "new_today": 0, "price_drops": 0, "hot_deals": 0},
         "new_deals": [], "price_drops": [], "hot_districts": [], "top_pick": None,
+        "auction_watch": [],
         "market_pulse": "Market pulse: insufficient weekly history.",
     }
 
@@ -610,6 +638,28 @@ def _dashboard_price_drop(drop: Dict[str, Any]) -> Dict[str, Any]:
             "old_price": drop["original_price"],
             "new_price": drop["current_price"],
             "drop_pct": drop["drop_pct"],
+        }
+    )
+
+
+def _dashboard_auction(listing: Listing) -> Dict[str, Any]:
+    return _omit_none_values(
+        {
+            "id": listing.id,
+            "source": listing.source,
+            "url": listing.url,
+            "title": listing.title,
+            "image_url": listing.image_url,
+            "price_eur": float(listing.price_eur),
+            "area_sqm": float(listing.area_sqm),
+            "price_per_sqm_eur": float(listing.price_per_sqm_eur),
+            "neighborhood": listing.neighborhood,
+            "property_type": listing.property_type,
+            "rooms": listing.rooms,
+            "auction_start": listing.auction_start.isoformat() if listing.auction_start else None,
+            "auction_end": listing.auction_end.isoformat() if listing.auction_end else None,
+            "bailiff_name": listing.bailiff_name,
+            "case_number": listing.case_number,
         }
     )
 

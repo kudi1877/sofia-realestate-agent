@@ -41,6 +41,9 @@ def test_trends_and_market_summary_exclude_duplicates_and_publish_median():
     rental = listing("rental", 5)
     rental.listing_kind = "rent"
     rental.is_sold = True
+    auction = listing("auction", 50)
+    auction.listing_kind = "auction"
+    auction.is_sold = True
     db.add_all(
         [
             listing("low", 1000),
@@ -48,6 +51,7 @@ def test_trends_and_market_summary_exclude_duplicates_and_publish_median():
             listing("duplicate", 9000, duplicate=True),
             off_market,
             rental,
+            auction,
             NeighborhoodStatsHistory(
                 neighborhood="Люлин",
                 snapshot_date=utc_now() - timedelta(days=31),

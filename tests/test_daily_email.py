@@ -51,7 +51,9 @@ def test_daily_email_uses_shared_session_dedup_and_preserves_shapes(tmp_path, mo
     rental.first_price_eur = 1000
     rental.price_eur = 100
     rental.price_changes = 1
-    db.add_all(rows + [duplicate, rental])
+    auction = listing("auction", 2)
+    auction.listing_kind = "auction"
+    db.add_all(rows + [duplicate, rental, auction])
     db.flush()
     db.add(
         Alert(
