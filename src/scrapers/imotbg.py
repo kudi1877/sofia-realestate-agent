@@ -23,6 +23,7 @@ class ImotBgScraper(BaseScraper):
     
     BASE_URL = "https://www.imot.bg"
     SOFIA_URL = "https://www.imot.bg/obiavi/prodazhbi/grad-sofiya"
+    SOFIA_RENT_URL = "https://www.imot.bg/obiavi/naemi/grad-sofiya"
     LISTINGS_PER_PAGE = 40
     
     # Scrape each property type separately to bypass 25-page limit
@@ -40,8 +41,13 @@ class ImotBgScraper(BaseScraper):
         ('etazh-ot-kashta', 'house', None),
     ]
     
-    def __init__(self, max_pages_per_type: int = 50):
-        super().__init__("imotbg", self.BASE_URL)
+    def __init__(self, max_pages_per_type: int = 50, deal_type: str = "sale"):
+        if deal_type not in {"sale", "rent"}:
+            raise ValueError("deal_type must be 'sale' or 'rent'")
+        self.listing_kind = deal_type
+        self.sofia_url = self.SOFIA_RENT_URL if deal_type == "rent" else self.SOFIA_URL
+        source = "imotbg-rent" if deal_type == "rent" else "imotbg"
+        super().__init__(source, self.BASE_URL)
         self.max_pages_per_type = max_pages_per_type
 
     @classmethod
@@ -242,8 +248,9 @@ class ImotBgScraper(BaseScraper):
                     furnishing = 'furnished'
             
             return {
-                'source': 'imotbg',
+                'source': self.source_name,
                 'source_id': source_id,
+                'listing_kind': self.listing_kind,
                 'url': href,
                 'image_url': image_url or None,
                 'title': f'{neighborhood}, София',
@@ -315,7 +322,7 @@ class ImotBgScraper(BaseScraper):
         # Strategy: scrape each property type separately
         # Each type has its own 25-page limit, so we get more total
         for slug, prop_type, rooms in self.PROPERTY_TYPE_SLUGS:
-            type_url = f"{self.SOFIA_URL}/{slug}"
+            type_url = f"{self.sofia_url}/{slug}"
             logger.info(f"=== Scraping {slug} ({prop_type}) ===")
             
             type_listings = self._scrape_url(type_url, seen_ids, prop_type, rooms)
@@ -325,7 +332,7 @@ class ImotBgScraper(BaseScraper):
         
         # Also scrape the main page for any we missed (mixed types)
         logger.info("=== Scraping main Sofia page for any missed ===")
-        main_listings = self._scrape_url(self.SOFIA_URL, seen_ids)
+        main_listings = self._scrape_url(self.sofia_url, seen_ids)
         all_listings.extend(main_listings)
         
         logger.info(f"Total: scraped {len(all_listings)} unique Sofia listings from imot.bg")

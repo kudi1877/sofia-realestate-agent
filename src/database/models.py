@@ -31,6 +31,7 @@ class Listing(Base):
     id = Column(Integer, primary_key=True)
     source = Column(String(20), nullable=False, index=True)  # imotbg, homesbg
     source_id = Column(String(100), nullable=False)
+    listing_kind = Column(String(8), nullable=False, default="sale", server_default="sale", index=True)
     
     # Cross-source deduplication
     canonical_id = Column(String(16), index=True)  # Fingerprint-based unique ID
@@ -178,6 +179,50 @@ class NeighborhoodStatsHistory(Base):
     )
 
 
+class NeighborhoodRentStats(Base):
+    """Current deduplicated rental medians by neighborhood and room bucket."""
+
+    __tablename__ = "neighborhood_rent_stats"
+
+    id = Column(Integer, primary_key=True)
+    neighborhood = Column(String(100), nullable=False)
+    rooms_bucket = Column(String(8), nullable=False)
+    median_rent_per_sqm = Column(Float, nullable=False)
+    listing_count = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=func.now())
+
+    __table_args__ = (
+        Index(
+            "idx_neighborhood_rent_stats_lookup",
+            "neighborhood",
+            "rooms_bucket",
+            unique=True,
+        ),
+    )
+
+
+class NeighborhoodRentStatsHistory(Base):
+    """Per-run rental median snapshots for later trend analysis."""
+
+    __tablename__ = "neighborhood_rent_stats_history"
+
+    id = Column(Integer, primary_key=True)
+    neighborhood = Column(String(100), nullable=False)
+    rooms_bucket = Column(String(8), nullable=False)
+    snapshot_date = Column(DateTime, nullable=False, default=func.now())
+    median_rent_per_sqm = Column(Float, nullable=False)
+    listing_count = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "idx_neighborhood_rent_stats_history_lookup",
+            "neighborhood",
+            "rooms_bucket",
+            "snapshot_date",
+        ),
+    )
+
+
 class Alert(Base):
     """Alert tracking for deals."""
     
@@ -228,6 +273,7 @@ def init_db():
             ("unique_listing_count", "INTEGER DEFAULT 0"),
         ],
         "listings": [
+            ("listing_kind", "VARCHAR(8) NOT NULL DEFAULT 'sale'"),
             ("canonical_id", "VARCHAR(16)"),
             ("is_duplicate", "BOOLEAN DEFAULT 0"),
             ("duplicate_of", "VARCHAR(100)"),

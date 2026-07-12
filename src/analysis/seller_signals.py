@@ -63,6 +63,7 @@ def update_motivated_scores(db: Session, *, now: datetime | None = None) -> Dict
         .options(selectinload(Listing.price_history))
         .filter(
             Listing.is_active.is_(True),
+            Listing.listing_kind == "sale",
             (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)),
         )
         .all()
@@ -105,6 +106,7 @@ def calculate_market_signals(
     now = now or utc_now()
     cutoff = now - timedelta(days=7)
     rows = db.query(Listing).filter(
+        Listing.listing_kind == "sale",
         (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)),
     ).all()
 

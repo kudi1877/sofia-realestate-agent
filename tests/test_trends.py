@@ -38,12 +38,16 @@ def test_trends_and_market_summary_exclude_duplicates_and_publish_median():
     off_market = listing("off-market", 1700)
     off_market.is_active = False
     off_market.is_sold = True
+    rental = listing("rental", 5)
+    rental.listing_kind = "rent"
+    rental.is_sold = True
     db.add_all(
         [
             listing("low", 1000),
             listing("high", 3000),
             listing("duplicate", 9000, duplicate=True),
             off_market,
+            rental,
             NeighborhoodStatsHistory(
                 neighborhood="Люлин",
                 snapshot_date=utc_now() - timedelta(days=31),

@@ -97,9 +97,15 @@ class ListingRepository:
             
             return listing
     
-    def get_active(self, limit: Optional[int] = None) -> List[Listing]:
-        """Get all active listings."""
+    def get_active(
+        self,
+        limit: Optional[int] = None,
+        listing_kind: Optional[str] = None,
+    ) -> List[Listing]:
+        """Get active listings, optionally isolated to sale or rent inventory."""
         query = self.db.query(Listing).filter(Listing.is_active == True)
+        if listing_kind:
+            query = query.filter(Listing.listing_kind == listing_kind)
         if limit:
             query = query.limit(limit)
         return query.all()
@@ -152,6 +158,7 @@ class ListingRepository:
         listings = self.db.query(Listing).filter(
             and_(
                 Listing.is_active == True,
+                Listing.listing_kind == "sale",
                 or_(Listing.is_duplicate.is_(False), Listing.is_duplicate.is_(None)),
                 Listing.first_price_eur.isnot(None),
                 Listing.price_changes > 0,
@@ -191,6 +198,7 @@ class ListingRepository:
         now = utc_now()
         cutoff = now - timedelta(days=days)
         stale = self.db.query(Listing).filter(
+            Listing.listing_kind == "sale",
             Listing.is_active.is_(False),
             (Listing.is_sold.is_(False)) | (Listing.is_sold.is_(None)),
             Listing.last_seen.isnot(None),
@@ -205,6 +213,7 @@ class ListingRepository:
     def count_off_market(self) -> int:
         """Count unique listings inferred to have left the market."""
         return self.db.query(func.count(Listing.id)).filter(
+            Listing.listing_kind == "sale",
             Listing.is_sold.is_(True),
             (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)),
         ).scalar() or 0
@@ -215,6 +224,7 @@ class ListingRepository:
         return self.db.query(Listing).filter(
             and_(
                 Listing.is_sold == True,
+                Listing.listing_kind == "sale",
                 Listing.sold_date >= cutoff,
             )
         ).order_by(desc(Listing.sold_date)).all()
@@ -225,6 +235,7 @@ class ListingRepository:
         return self.db.query(Listing).filter(
             and_(
                 Listing.is_active == True,
+                Listing.listing_kind == "sale",
                 Listing.last_seen < cutoff,
             )
         ).all()
@@ -344,8 +355,11 @@ class AlertRepository:
         return alert
     
     def get_unsent(self) -> List[Alert]:
-        """Get unsent alerts."""
-        return self.db.query(Alert).filter(Alert.sent_at.is_(None)).all()
+        """Get unsent sale alerts; rentals never enter the deal digest."""
+        return self.db.query(Alert).join(Listing).filter(
+            Alert.sent_at.is_(None),
+            Listing.listing_kind == "sale",
+        ).all()
     
     def mark_sent(self, alert_id: int):
         """Mark alert as sent."""

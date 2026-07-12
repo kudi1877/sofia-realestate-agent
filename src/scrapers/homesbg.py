@@ -13,20 +13,23 @@ from src.config import EUR_BGN_RATE, SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX
 
 
 class HomesBgScraper:
-    """Scrape the site's Sofia apartment-for-sale result set."""
+    """Scrape the site's Sofia sale or rental result set."""
     
     API_URL = "https://www.homes.bg/api/offers"
     BASE_URL = "https://www.homes.bg"
     RESULTS_PER_PAGE = 20
-    SEARCH_PARAMS = {
-        "typeId": "ApartmentSell",
-        "locationId": "1",  # Sofia in the site's search form.
+    SEARCH_PARAMS_BY_KIND = {
+        "sale": {"typeId": "ApartmentSell", "locationId": "1"},
+        "rent": {"typeId": "ApartmentRent", "locationId": "1"},
     }
     
-    def __init__(self, max_pages: int = 50):
+    def __init__(self, max_pages: int = 50, deal_type: str = "sale"):
+        if deal_type not in self.SEARCH_PARAMS_BY_KIND:
+            raise ValueError("deal_type must be 'sale' or 'rent'")
         # Intentional sample: ~1,000 of ~11k listings keeps nightly runtime down.
         self.max_pages = max_pages
-        self.source_name = "homesbg"
+        self.listing_kind = deal_type
+        self.source_name = "homesbg-rent" if deal_type == "rent" else "homesbg"
 
     @classmethod
     def parse_detail(cls, soup) -> Dict[str, Any]:
@@ -76,11 +79,11 @@ class HomesBgScraper:
         }
 
     @classmethod
-    def _request_params(cls, page: int) -> Dict[str, Any]:
+    def _request_params(cls, page: int, listing_kind: str = "sale") -> Dict[str, Any]:
         """Build the pagination query used by the Homes.bg infinite-scroll client."""
         start_index = (page - 1) * cls.RESULTS_PER_PAGE
         return {
-            **cls.SEARCH_PARAMS,
+            **cls.SEARCH_PARAMS_BY_KIND[listing_kind],
             "startIndex": start_index,
             "stopIndex": start_index + cls.RESULTS_PER_PAGE - 1,
         }
@@ -199,6 +202,9 @@ class HomesBgScraper:
                 'as': 'apartment',  # апартамент за продажба
                 'hs': 'house',     # къща за продажба
                 'ps': 'plot',      # парцел за продажба
+                'ar': 'apartment', # апартамент под наем
+                'hr': 'house',     # къща под наем
+                'pr': 'plot',      # парцел под наем
             }
             prop_type = type_map.get(type_code, 'apartment')
             
@@ -236,8 +242,9 @@ class HomesBgScraper:
                 heating = 'electric'
             
             return {
-                'source': 'homesbg',
+                'source': self.source_name,
                 'source_id': str(item.get('id', '')),
+                'listing_kind': self.listing_kind,
                 'url': f"{self.BASE_URL}{item.get('viewHref', '')}",
                 'image_url': self._primary_image_url(item),
                 'title': f"{neighborhood}, София",
@@ -274,7 +281,7 @@ class HomesBgScraper:
         
         page = 1
         while page <= self.max_pages:
-            params = self._request_params(page)
+            params = self._request_params(page, self.listing_kind)
             logger.info(
                 f"Scraping homes.bg Sofia API page {page} "
                 f"(results {params['startIndex']}-{params['stopIndex']})"

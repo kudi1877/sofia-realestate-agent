@@ -48,6 +48,7 @@ ANTHROPIC_OUTPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_OUTPUT_USD_PER_MTOK",
 # Sanity floor: nothing in Sofia genuinely sells below this — prices under it
 # are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).
 MIN_PRICE_EUR = float(os.getenv("MIN_PRICE_EUR", "5000"))
+MIN_RENT_EUR = float(os.getenv("MIN_RENT_EUR", "100"))
 
 # Published neighborhood medians below this €/m² are land-dominated blends,
 # not residential prices — suppress rather than publish (TIN-476).

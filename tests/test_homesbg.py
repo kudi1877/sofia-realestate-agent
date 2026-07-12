@@ -35,6 +35,24 @@ def test_request_params_match_homes_infinite_scroll_contract():
         "startIndex": 20,
         "stopIndex": 39,
     }
+    assert HomesBgScraper._request_params(1, "rent") == {
+        "typeId": "ApartmentRent",
+        "locationId": "1",
+        "startIndex": 0,
+        "stopIndex": 19,
+    }
+
+
+def test_rental_response_uses_separate_source_kind_and_type_code():
+    item = api_item("rent-1", "жк. Лозенец, София")
+    item["type"] = "ar"
+    item["price"]["value"] = "750"
+
+    listing = HomesBgScraper(deal_type="rent")._parse_listing(item)
+
+    assert listing["source"] == "homesbg-rent"
+    assert listing["listing_kind"] == "rent"
+    assert listing["property_type"] == "apartment"
 
 
 def test_scrape_continues_when_api_page_has_no_parsed_sofia_matches(monkeypatch):

@@ -8,6 +8,7 @@ from src.database.models import (
     Base,
     Listing,
     Neighborhood,
+    NeighborhoodRentStats,
     NeighborhoodStatsHistory,
     PriceHistory,
 )
@@ -138,6 +139,34 @@ def test_build_listings_payload_omits_none_listing_values():
     assert "image_url" not in item
 
 
+def test_listings_payload_excludes_rentals_and_exports_sale_gross_yield():
+    _engine, db = session()
+    sale = listing("sale-yield")
+    rental = listing("rental-hidden")
+    rental.listing_kind = "rent"
+    rental.price_eur = 500
+    rental.price_per_sqm_eur = 10
+    db.add_all(
+        [
+            sale,
+            rental,
+            NeighborhoodRentStats(
+                neighborhood="Люлин",
+                rooms_bucket="2",
+                median_rent_per_sqm=10,
+                listing_count=10,
+            ),
+        ]
+    )
+    db.commit()
+
+    payload = _build_listings_payload(db)
+
+    assert [row["source_id"] for row in payload["listings"]] == ["sale-yield"]
+    assert payload["listings"][0]["listing_kind"] == "sale"
+    assert payload["listings"][0]["gross_yield_pct"] == 6.0
+
+
 def test_dashboard_export_never_leaks_contact_fields_or_values():
     _engine, db = session()
     row = listing("private-contact")
@@ -255,6 +284,14 @@ def test_build_market_payload_is_deduplicated_median_first_and_snapshot_ready(mo
             listing_count=3,
         )
     )
+    db.add(
+        NeighborhoodRentStats(
+            neighborhood="Люлин",
+            rooms_bucket="all",
+            median_rent_per_sqm=10,
+            listing_count=20,
+        )
+    )
     for index in range(8):
         db.add(
             NeighborhoodStatsHistory(
@@ -278,6 +315,8 @@ def test_build_market_payload_is_deduplicated_median_first_and_snapshot_ready(mo
     assert hood["trend_30d_pct"] == 3.95
     assert hood["trend_direction"] == "up"
     assert len(hood["history"]) == 8
+    assert hood["median_rent_per_sqm"] == 10.0
+    assert hood["gross_yield_pct"] == 6.0
 
 
 def test_write_json_uses_compact_separators(tmp_path):

@@ -62,6 +62,10 @@ def _unique_listing_clause():
     return (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None))
 
 
+def _sale_listing_clause():
+    return Listing.listing_kind == "sale"
+
+
 def _sane_price_clause():
     """Defense in depth vs price-parse artifacts (TIN-472: a €6 'Top Pick')."""
     return Listing.price_eur >= MIN_PRICE_EUR
@@ -75,6 +79,7 @@ def _group_medians(db: Session) -> Dict[tuple[str, str], float]:
         Listing.price_per_sqm_eur,
     ).filter(
         Listing.is_active.is_(True),
+        _sale_listing_clause(),
         _unique_listing_clause(),
         _sane_price_clause(),
         Listing.price_per_sqm_eur > 0,
@@ -120,6 +125,7 @@ def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
     group_prices = _group_medians(db)
     rows = db.query(Listing).join(Alert).filter(
         Listing.is_active.is_(True),
+        _sale_listing_clause(),
         _unique_listing_clause(),
         _sane_price_clause(),
         Listing.first_seen >= cutoff,
@@ -131,6 +137,7 @@ def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
     if not rows:
         candidates = db.query(Listing).filter(
             Listing.is_active.is_(True),
+            _sale_listing_clause(),
             _unique_listing_clause(),
             _sane_price_clause(),
             Listing.first_seen >= cutoff,
@@ -180,6 +187,7 @@ def _query_district_velocity(db: Session, days: int = 7) -> List[Dict[str, Any]]
     cutoff = utc_now() - timedelta(days=days)
     rows = db.query(Listing).filter(
         Listing.neighborhood.isnot(None),
+        _sale_listing_clause(),
         _unique_listing_clause(),
     ).order_by(Listing.id).all()
     grouped = defaultdict(list)
@@ -235,6 +243,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
     group_prices = _group_medians(db)
     alert_row = db.query(Listing, Alert).join(Alert).filter(
         Listing.is_active.is_(True),
+        _sale_listing_clause(),
         _unique_listing_clause(),
         _sane_price_clause(),
         Listing.property_type == "apartment",
@@ -249,6 +258,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
     else:
         candidates = db.query(Listing).filter(
             Listing.is_active.is_(True),
+            _sale_listing_clause(),
             _unique_listing_clause(),
             _sane_price_clause(),
             Listing.property_type == "apartment",
@@ -316,6 +326,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
 def _get_total_active(db: Session) -> int:
     return db.query(Listing).filter(
         Listing.is_active.is_(True),
+        _sale_listing_clause(),
         _unique_listing_clause(),
     ).count()
 
@@ -324,6 +335,7 @@ def _get_new_today_count(db: Session, hours: int = 24) -> int:
     cutoff = utc_now() - timedelta(hours=hours)
     return db.query(Listing).filter(
         Listing.first_seen >= cutoff,
+        _sale_listing_clause(),
         _unique_listing_clause(),
     ).count()
 

@@ -48,6 +48,13 @@ def test_missing_area_uses_zero_area_bucket():
     assert generate_fingerprint(without_area).split("_")[1] == "0"
 
 
+def test_sale_and_rent_ads_never_share_a_fingerprint():
+    sale = listing(listing_kind="sale")
+    rental = listing(listing_kind="rent")
+
+    assert generate_fingerprint(sale) != generate_fingerprint(rental)
+
+
 def test_deduplicate_keeps_highest_priority_source_as_winner():
     low_priority = listing(source="propertybg", source_id="propertybg-1")
     high_priority = listing(source="imotiinfo", source_id="imotiinfo-1")

@@ -72,9 +72,11 @@ def test_cmd_scrape_upserts_unique_winners_and_flagged_duplicates(monkeypatch):
     monkeypatch.setattr(
         main_module,
         "ImotBgScraper",
-        lambda: FakeScraper([listing("imotbg", "imotbg-1")]),
+        lambda **kwargs: FakeScraper(
+            [] if kwargs.get("deal_type") == "rent" else [listing("imotbg", "imotbg-1")]
+        ),
     )
-    monkeypatch.setattr(main_module, "HomesBgScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "HomesBgScraper", lambda **_kwargs: FakeScraper([]))
     monkeypatch.setattr(
         main_module,
         "ImotiInfoScraper",
@@ -107,9 +109,12 @@ def test_cmd_scrape_skips_mark_inactive_for_partial_source(monkeypatch):
     monkeypatch.setattr(
         main_module,
         "ImotBgScraper",
-        lambda: FakeScraper([listing("imotbg", f"imotbg-{index}") for index in range(4)]),
+        lambda **kwargs: FakeScraper(
+            [] if kwargs.get("deal_type") == "rent"
+            else [listing("imotbg", f"imotbg-{index}") for index in range(4)]
+        ),
     )
-    monkeypatch.setattr(main_module, "HomesBgScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "HomesBgScraper", lambda **_kwargs: FakeScraper([]))
     monkeypatch.setattr(main_module, "ImotiInfoScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "ImotiNetScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "PropertyBGScraper", lambda: FakeScraper([]))
@@ -134,9 +139,12 @@ def test_cmd_scrape_marks_inactive_when_source_count_is_normal(monkeypatch):
     monkeypatch.setattr(
         main_module,
         "ImotBgScraper",
-        lambda: FakeScraper([listing("imotbg", f"imotbg-{index}") for index in range(6)]),
+        lambda **kwargs: FakeScraper(
+            [] if kwargs.get("deal_type") == "rent"
+            else [listing("imotbg", f"imotbg-{index}") for index in range(6)]
+        ),
     )
-    monkeypatch.setattr(main_module, "HomesBgScraper", lambda: FakeScraper([]))
+    monkeypatch.setattr(main_module, "HomesBgScraper", lambda **_kwargs: FakeScraper([]))
     monkeypatch.setattr(main_module, "ImotiInfoScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "ImotiNetScraper", lambda: FakeScraper([]))
     monkeypatch.setattr(main_module, "PropertyBGScraper", lambda: FakeScraper([]))
@@ -144,3 +152,13 @@ def test_cmd_scrape_marks_inactive_when_source_count_is_normal(monkeypatch):
     main_module.cmd_scrape()
 
     assert repo.marked_inactive == [("imotbg", [f"imotbg-{index}" for index in range(6)])]
+
+
+def test_sale_and_rent_price_floors_are_independent(monkeypatch):
+    monkeypatch.setattr(main_module, "MIN_PRICE_EUR", 5000)
+    monkeypatch.setattr(main_module, "MIN_RENT_EUR", 100)
+
+    assert main_module.listing_passes_price_floor({"listing_kind": "sale", "price_eur": 4999}) is False
+    assert main_module.listing_passes_price_floor({"listing_kind": "sale", "price_eur": 5000}) is True
+    assert main_module.listing_passes_price_floor({"listing_kind": "rent", "price_eur": 99}) is False
+    assert main_module.listing_passes_price_floor({"listing_kind": "rent", "price_eur": 100}) is True

@@ -28,6 +28,7 @@ def _active_unique_prices(db: Session):
         Listing.price_per_sqm_eur,
     ).filter(
         Listing.is_active.is_(True),
+        Listing.listing_kind == "sale",
         _is_unique_listing_clause(),
         Listing.price_per_sqm_eur > 0,
     ).all()
@@ -116,6 +117,7 @@ def detect_price_drops(db: Session, days: int = 7) -> List[Dict[str, Any]]:
     history = db.query(PriceHistory, Listing).join(Listing).filter(
         PriceHistory.recorded_at >= cutoff_date,
         Listing.is_active.is_(True),
+        Listing.listing_kind == "sale",
         _is_unique_listing_clause(),
     ).order_by(
         PriceHistory.listing_id,
@@ -189,6 +191,7 @@ def generate_market_summary(db: Session) -> Dict[str, Any]:
 
     off_market = db.query(Listing).filter(
         Listing.is_sold.is_(True),
+        Listing.listing_kind == "sale",
         _is_unique_listing_clause(),
     ).count()
 

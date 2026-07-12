@@ -42,6 +42,7 @@ class HttpClient(Protocol):
 
 def classify_response(source: str, requested_url: str, response: httpx.Response) -> Availability:
     """Classify one response using only observed, source-owned signals."""
+    source = source.removesuffix("-rent")
     if response.status_code in (404, 410):
         return "gone"
     if response.status_code == 429 or response.status_code >= 500:

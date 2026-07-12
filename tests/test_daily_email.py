@@ -46,7 +46,12 @@ def test_daily_email_uses_shared_session_dedup_and_preserves_shapes(tmp_path, mo
     duplicate.first_price_eur = 100000
     duplicate.price_eur = 10000
     duplicate.price_changes = 1
-    db.add_all(rows + [duplicate])
+    rental = listing("rental", 1)
+    rental.listing_kind = "rent"
+    rental.first_price_eur = 1000
+    rental.price_eur = 100
+    rental.price_changes = 1
+    db.add_all(rows + [duplicate, rental])
     db.flush()
     db.add(
         Alert(
@@ -55,6 +60,15 @@ def test_daily_email_uses_shared_session_dedup_and_preserves_shapes(tmp_path, mo
             zscore=-2.0,
             savings_eur=10000,
             savings_pct=20,
+        )
+    )
+    db.add(
+        Alert(
+            listing_id=rental.id,
+            alert_type="underpriced",
+            zscore=-10,
+            savings_eur=100000,
+            savings_pct=99,
         )
     )
     db.commit()

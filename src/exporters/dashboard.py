@@ -37,8 +37,14 @@ from src.config import (
 from src.analysis.anomaly import calculate_neighborhood_stats
 from src.analysis.imotbg_benchmark import fetch_benchmark
 from src.analysis.seller_signals import calculate_market_signals, market_pulse_line
+from src.analysis.rental_market import gross_yield_pct, rent_stats_lookup
 from src.analysis.data_health import evaluate_data_health, load_previous_runs
-from src.database.models import Listing, Neighborhood, NeighborhoodStatsHistory
+from src.database.models import (
+    Listing,
+    Neighborhood,
+    NeighborhoodRentStats,
+    NeighborhoodStatsHistory,
+)
 from src.utils.git import changed_files, commit_and_push
 from src.utils.time import utc_now
 
@@ -62,6 +68,9 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     rows = (
         db.query(Listing)
         .options(selectinload(Listing.alerts), selectinload(Listing.price_history))
+        # The browser remains a sale product; rentals feed pre-aggregated rent
+        # and yield metrics below, avoiding incomparable monthly/card prices.
+        .filter(Listing.listing_kind == "sale")
         .filter((Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)))
         .filter(
             (Listing.is_active.is_(True))
@@ -71,6 +80,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
     )
     sibling_rows = (
         db.query(Listing.canonical_id, Listing.source, Listing.url)
+        .filter(Listing.listing_kind == "sale")
         .filter(Listing.canonical_id.isnot(None))
         .filter(
             (Listing.is_active.is_(True))
@@ -107,6 +117,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         return None
 
     listings: List[Dict[str, Any]] = []
+    rental_stats = rent_stats_lookup(db)
     for l in rows:
         alert_zscore, savings_pct = _latest_alert_values_for_listing(l)
         # is_deal is the single source of truth for deal badges/feeds: only
@@ -123,6 +134,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                 {
                     "id": l.id,
                     "source": l.source,
+                    "listing_kind": l.listing_kind,
                     # Stable keys for the dashboard's favorites/watchlist —
                     # canonical_id survives cross-source dedup switches.
                     "source_id": l.source_id,
@@ -175,6 +187,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     # means we haven't seen it for ≥1 scrape but it's within 30d.
                     "is_active": bool(l.is_active),
                     "motivated_score": int(l.motivated_score or 0),
+                    "gross_yield_pct": gross_yield_pct(l, rental_stats),
                     "exposure": json.loads(l.exposure) if l.exposure else None,
                     "renovation_state": l.renovation_state,
                     "act16": l.act16,
@@ -299,6 +312,7 @@ def _build_market_payload(
     unique_clause = (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None))
     active_rows = db.query(Listing).filter(
         Listing.is_active.is_(True),
+        Listing.listing_kind == "sale",
         unique_clause,
     ).all()
 
@@ -341,6 +355,12 @@ def _build_market_payload(
         )
 
     neighborhoods = []
+    rent_by_neighborhood = {
+        row.neighborhood: row
+        for row in db.query(NeighborhoodRentStats).filter(
+            NeighborhoodRentStats.rooms_bucket == "all"
+        ).all()
+    }
     hood_rows = db.query(Neighborhood).filter(
         Neighborhood.median_price_per_sqm.isnot(None),
         Neighborhood.median_price_per_sqm > 0,
@@ -353,6 +373,13 @@ def _build_market_payload(
             apartment_dom
             if len(apartment_dom) >= MIN_LISTINGS_PER_GROUP
             else dom_all.get(hood.name) or []
+        )
+        rent_stat = rent_by_neighborhood.get(hood.name)
+        median_rent = float(rent_stat.median_rent_per_sqm) if rent_stat else None
+        representative_yield = (
+            round(median_rent * 12 / float(hood.median_price_per_sqm) * 100, 2)
+            if median_rent is not None and hood.median_price_per_sqm
+            else None
         )
         neighborhoods.append(
             {
@@ -373,12 +400,15 @@ def _build_market_payload(
                     else "insufficient history"
                 ),
                 "history": history,
+                "median_rent_per_sqm": round(median_rent, 2) if median_rent is not None else None,
+                "gross_yield_pct": representative_yield,
                 **seller_signals["neighborhoods"].get(hood.name, {}),
             }
         )
 
     off_market = db.query(Listing).filter(
         Listing.is_sold.is_(True),
+        Listing.listing_kind == "sale",
         unique_clause,
     ).count()
     new_this_week = sum(

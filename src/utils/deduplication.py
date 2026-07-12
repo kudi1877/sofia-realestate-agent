@@ -3,7 +3,7 @@
 This module provides functionality to identify and merge duplicate listings
 across different sources based on property fingerprints.
 
-Fingerprint format: {neighborhood}_{rounded_area}_{rooms}_{price_range}
+Fingerprint format: {neighborhood}_{rounded_area}_{rooms}_{price_range}_{listing_kind}
 Source priority: imoti.info > imot.bg > others
 """
 
@@ -22,6 +22,8 @@ SOURCE_PRIORITY = {
     'homesbg': 3,     # Medium quality
     'imotinet': 4,    # Lower coverage
     'propertybg': 5,  # Lowest priority
+    'imotbg-rent': 2,
+    'homesbg-rent': 3,
 }
 
 
@@ -94,7 +96,8 @@ def generate_fingerprint(listing: Dict[str, Any]) -> str:
         elif prop_type == 'house':
             rooms = 0  # Houses vary more, use 0 as wildcard
     
-    fingerprint = f"{neighborhood}_{area}_{rooms}_{price_range}"
+    listing_kind = listing.get("listing_kind") or "sale"
+    fingerprint = f"{neighborhood}_{area}_{rooms}_{price_range}_{listing_kind}"
     return fingerprint
 
 

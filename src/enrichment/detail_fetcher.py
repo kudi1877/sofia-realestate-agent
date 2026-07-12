@@ -26,7 +26,9 @@ from src.utils.time import utc_now
 
 DETAIL_PARSERS = {
     "homesbg": HomesBgScraper.parse_detail,
+    "homesbg-rent": HomesBgScraper.parse_detail,
     "imotbg": ImotBgScraper.parse_detail,
+    "imotbg-rent": ImotBgScraper.parse_detail,
     "imotiinfo": ImotiInfoScraper.parse_detail,
     "imotinet": ImotiNetScraper.parse_detail,
     "propertybg": PropertyBGScraper.parse_detail,
@@ -34,6 +36,7 @@ DETAIL_PARSERS = {
 
 SOURCE_ENCODINGS = {
     "imotbg": "windows-1251",
+    "imotbg-rent": "windows-1251",
 }
 
 

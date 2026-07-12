@@ -20,14 +20,26 @@ from src.scrapers.imotinet import ImotiNetScraper
 from src.scrapers.propertybg import PropertyBGScraper
 from src.analysis.anomaly import analyze_database, calculate_neighborhood_stats
 from src.analysis.trends import calculate_neighborhood_trends, generate_market_summary
+from src.analysis.rental_market import update_neighborhood_rent_stats
 from src.alerts.telegram import should_send_alert
-from src.config import MARK_INACTIVE_MIN_RATIO, PUBLISH_MIN_MEDIAN_EUR_SQM, SOLD_AFTER_DAYS
+from src.config import (
+    MARK_INACTIVE_MIN_RATIO,
+    MIN_PRICE_EUR,
+    MIN_RENT_EUR,
+    PUBLISH_MIN_MEDIAN_EUR_SQM,
+    SOLD_AFTER_DAYS,
+)
 from src.utils.deduplication import deduplicate_listings, get_duplicate_stats
 
 
 # Configure logging
 logger.remove()
 logger.add(sys.stderr, level="INFO", format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
+
+
+def listing_passes_price_floor(listing: Dict[str, Any]) -> bool:
+    floor = MIN_RENT_EUR if listing.get("listing_kind") == "rent" else MIN_PRICE_EUR
+    return (listing.get("price_eur") or 0) >= floor
 
 
 def cmd_scrape(recorder=None):
@@ -53,6 +65,8 @@ def cmd_scrape(recorder=None):
     SCRAPERS = [
         ("imot.bg",     "imotbg",     lambda: ImotBgScraper()),
         ("homes.bg",    "homesbg",    lambda: HomesBgScraper()),
+        ("imot.bg rent", "imotbg-rent", lambda: ImotBgScraper(deal_type="rent", max_pages_per_type=10)),
+        ("homes.bg rent", "homesbg-rent", lambda: HomesBgScraper(deal_type="rent", max_pages=10)),
         ("imoti.info",  "imotiinfo",  lambda: ImotiInfoScraper()),
         ("imoti.net",   "imotinet",   lambda: ImotiNetScraper()),
         ("property.bg", "propertybg", lambda: PropertyBGScraper()),
@@ -91,16 +105,18 @@ def cmd_scrape(recorder=None):
     # imoti.net's Latin slugs ("Bankja") and prefixed variants ("гр. Банкя")
     # into one canonical Cyrillic group per place.
     from src.utils.neighborhoods import canonicalize_neighborhood
-    from src.config import MIN_PRICE_EUR
     for listing in all_listings:
+        listing.setdefault('listing_kind', 'sale')
         listing['neighborhood'] = canonicalize_neighborhood(listing.get('neighborhood'))
 
     # Price sanity floor (TIN-472): sub-floor prices are parse artifacts
     # (a €6 "listing" once made Top Pick of the Day).
     before = len(all_listings)
-    all_listings = [l for l in all_listings if (l.get('price_eur') or 0) >= MIN_PRICE_EUR]
+    all_listings = [listing for listing in all_listings if listing_passes_price_floor(listing)]
     if before - len(all_listings):
-        logger.warning(f"Dropped {before - len(all_listings)} listings below €{MIN_PRICE_EUR:,.0f} price floor")
+        logger.warning(
+            f"Dropped {before - len(all_listings)} listings below the sale/rent price floors"
+        )
 
     # Deduplicate listings before saving
     logger.info(f"Total raw listings: {len(all_listings)}")
@@ -206,7 +222,7 @@ def update_neighborhood_stats(db):
     history_repo = NeighborhoodStatsHistoryRepository(db)
     
     # Get only unique (non-duplicate) active listings for stats
-    listings = repo.get_active()
+    listings = repo.get_active(listing_kind="sale")
     unique_listings = [l for l in listings if not getattr(l, 'is_duplicate', False)]
     
     stats = calculate_neighborhood_stats(unique_listings)
@@ -221,6 +237,7 @@ def update_neighborhood_stats(db):
         )
 
     history_repo.record_snapshot(published_stats)
+    rent_groups = update_neighborhood_rent_stats(db)
 
     # Clear stats for hoods NOT in the published set — otherwise a hood that
     # gets suppressed (e.g. land-dominated, TIN-476) keeps serving its stale
@@ -237,6 +254,7 @@ def update_neighborhood_stats(db):
 
     logger.info(
         f"Updated published stats for {len(published_stats)} neighborhoods"
+        + f" and {rent_groups} rental groups"
         + (f"; cleared {cleared} suppressed" if cleared else "")
     )
 
@@ -426,7 +444,7 @@ def cmd_alerts():
     # Aggregate stats.
     listing_repo = ListingRepository(db)
     total_active = sum(
-        1 for l in listing_repo.get_active()
+        1 for l in listing_repo.get_active(listing_kind="sale")
         if not getattr(l, 'is_duplicate', False)
     )
 
@@ -525,6 +543,7 @@ def cmd_dedup_stats():
             'price_eur': l.price_eur,
             'rooms': l.rooms,
             'property_type': l.property_type,
+            'listing_kind': l.listing_kind,
         }
         for l in listings
     ]
@@ -694,7 +713,7 @@ def cmd_full():
         from src.database.repository import ListingRepository as _LRepo
         _db = _get_db()
         active_after = sum(
-            1 for l in _LRepo(_db).get_active()
+            1 for l in _LRepo(_db).get_active(listing_kind="sale")
             if not getattr(l, 'is_duplicate', False)
         )
         rec.finalize(active_after=active_after, scraped_total=scraped)
