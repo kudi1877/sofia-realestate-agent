@@ -1,5 +1,6 @@
 """Scraper for homes.bg via the JSON API used by its Sofia search page."""
 
+import json
 import re
 import time
 import random
@@ -26,6 +27,53 @@ class HomesBgScraper:
         # Intentional sample: ~1,000 of ~11k listings keeps nightly runtime down.
         self.max_pages = max_pages
         self.source_name = "homesbg"
+
+    @classmethod
+    def parse_detail(cls, soup) -> Dict[str, Any]:
+        """Parse the server-embedded offer JSON from a Homes.bg detail page.
+
+        Live recon found no separate detail endpoint in the offer bundle; the
+        SSR page's ``window.__PRELOADED_STATE__`` contains the complete offer.
+        """
+        script = next(
+            (tag.get_text() for tag in soup.find_all("script") if "window.__PRELOADED_STATE__" in tag.get_text()),
+            "",
+        )
+        match = re.search(r"window\.__PRELOADED_STATE__\s*=\s*(\{.*\})\s*;?", script, re.DOTALL)
+        if not match:
+            return {}
+        try:
+            offer = json.loads(match.group(1)).get("data", {}).get("offer", {})
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if not offer:
+            return {}
+
+        attributes = {item.get("key"): item.get("value") for item in offer.get("attributes", [])}
+        address_data = offer.get("address") or {}
+        coordinates = address_data.get("coordinates") or []
+        broker = (offer.get("contacts") or {}).get("broker") or {}
+        agency = (offer.get("contacts") or {}).get("agency") or {}
+        images = []
+        for photo in offer.get("photos") or []:
+            path = str(photo.get("path") or "").lstrip("/")
+            name = str(photo.get("name") or "")
+            if name:
+                images.append(f"https://g1.homes.bg/{path}{name}o.jpg")
+        return {
+            "description_full": attributes.get("notes") or None,
+            "address": ", ".join(
+                str(value) for value in (address_data.get("city"),)
+                if value not in (None, "", 0)
+            ) or None,
+            "latitude": coordinates[0] if len(coordinates) >= 2 else None,
+            "longitude": coordinates[1] if len(coordinates) >= 2 else None,
+            "seller_type": "agency" if agency.get("name") else "broker" if broker.get("name") else None,
+            "seller_name": broker.get("name") or agency.get("name"),
+            "contact_phone": broker.get("phone") or agency.get("phone"),
+            "contact_email": None,
+            "image_urls": images,
+        }
 
     @classmethod
     def _request_params(cls, page: int) -> Dict[str, Any]:

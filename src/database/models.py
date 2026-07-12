@@ -62,6 +62,17 @@ class Listing(Base):
     
     # Description
     description = Column(Text)
+    description_full = Column(Text)
+    address = Column(Text)
+    latitude = Column(Float)
+    longitude = Column(Float)
+    seller_type = Column(String(20))
+    seller_name = Column(Text)
+    contact_phone = Column(String(32))
+    contact_email = Column(Text)
+    image_urls = Column(Text)
+    image_count = Column(Integer)
+    enriched_at = Column(DateTime)
     
     # Price tracking
     first_price_eur = Column(Float)
@@ -220,6 +231,17 @@ def init_db():
             ("image_url", "TEXT"),
             ("availability_checked_at", "DATETIME"),
             ("motivated_score", "INTEGER"),
+            ("description_full", "TEXT"),
+            ("address", "TEXT"),
+            ("latitude", "FLOAT"),
+            ("longitude", "FLOAT"),
+            ("seller_type", "VARCHAR(20)"),
+            ("seller_name", "TEXT"),
+            ("contact_phone", "VARCHAR(32)"),
+            ("contact_email", "TEXT"),
+            ("image_urls", "TEXT"),
+            ("image_count", "INTEGER"),
+            ("enriched_at", "DATETIME"),
         ],
     }
 

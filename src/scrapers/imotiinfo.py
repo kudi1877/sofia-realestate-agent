@@ -42,6 +42,32 @@ class ImotiInfoScraper(BaseScraper):
     def __init__(self, max_pages_per_type: int = 25):
         super().__init__("imotiinfo", self.BASE_URL)
         self.max_pages_per_type = max_pages_per_type
+
+    @classmethod
+    def parse_detail(cls, soup: BeautifulSoup) -> Dict[str, Any]:
+        description_node = soup.select_one(".description .text") or soup.select_one(".description")
+        location = soup.select_one(".obiava .location") or soup.select_one(".location")
+        broker = soup.select_one(".broker")
+        phone_link = soup.select_one('a[href^="tel:"]')
+        email_link = soup.select_one('a[href^="mailto:"]')
+        page_html = str(soup)
+        coordinates = re.search(r'"mraion"\s*:\s*\[\s*([0-9.]+)\s*,\s*([0-9.]+)', page_html)
+        images = [
+            urljoin(cls.BASE_URL, image.get("src"))
+            for image in soup.select(".photos img[src]")
+            if image.get("src")
+        ]
+        return {
+            "description_full": description_node.get_text(" ", strip=True) if description_node else None,
+            "address": location.get_text(" ", strip=True) if location else None,
+            "latitude": float(coordinates.group(1)) if coordinates else None,
+            "longitude": float(coordinates.group(2)) if coordinates else None,
+            "seller_type": "agency" if broker else None,
+            "seller_name": broker.get_text(" ", strip=True) if broker else None,
+            "contact_phone": phone_link.get("href", "")[4:] if phone_link else None,
+            "contact_email": email_link.get("href", "")[7:] if email_link else None,
+            "image_urls": images,
+        }
     
     def _extract_json_data(self, soup: BeautifulSoup) -> Optional[dict]:
         """Extract the embedded JSON data from the page's script tags."""

@@ -7,6 +7,7 @@ Listing items: div.item.TOP or div.item.BEST
 """
 
 import re
+import json
 from typing import List, Dict, Any, Optional
 from urllib.parse import urljoin
 
@@ -42,6 +43,52 @@ class ImotBgScraper(BaseScraper):
     def __init__(self, max_pages_per_type: int = 50):
         super().__init__("imotbg", self.BASE_URL)
         self.max_pages_per_type = max_pages_per_type
+
+    @classmethod
+    def parse_detail(cls, soup: BeautifulSoup) -> Dict[str, Any]:
+        """Parse server-rendered imot.bg detail fields (windows-1251 page)."""
+        description = None
+        heading = next((h for h in soup.find_all("h2") if "Описание на имота" in h.get_text()), None)
+        if heading and heading.parent:
+            block = heading.parent.find_next_sibling("div", class_="text")
+            description = block.get_text(" ", strip=True) if block else None
+
+        address = None
+        location = next((h for h in soup.find_all("h2") if "Местоположение:" in h.get_text()), None)
+        if location:
+            address = location.get_text(" ", strip=True).split(":", 1)[-1].strip()
+
+        seller = {}
+        for script in soup.select('script[type="application/ld+json"]'):
+            try:
+                data = json.loads(script.get_text())
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if data.get("@type") == "Offer":
+                seller = data.get("seller") or {}
+                break
+
+        images = [
+            urljoin(cls.BASE_URL, image.get("src"))
+            for image in soup.select(".smallPicturesGallery img[src]")
+            if image.get("src")
+        ]
+        phone = next(
+            (node.get_text(" ", strip=True) for node in soup.select(".contactsBox .phone") if re.search(r"\d{8,}", node.get_text())),
+            None,
+        )
+        email_link = soup.select_one('a[href^="mailto:"]')
+        return {
+            "description_full": description,
+            "address": address,
+            "latitude": None,
+            "longitude": None,
+            "seller_type": "agency" if seller.get("name") else None,
+            "seller_name": seller.get("name"),
+            "contact_phone": phone,
+            "contact_email": email_link.get("href", "")[7:] if email_link else seller.get("email"),
+            "image_urls": images,
+        }
     
     def _parse_listing_item(self, item_div) -> Optional[Dict[str, Any]]:
         """Parse a single listing item div from the search results."""

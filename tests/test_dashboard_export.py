@@ -128,6 +128,23 @@ def test_build_listings_payload_omits_none_listing_values():
     assert "image_url" not in item
 
 
+def test_dashboard_export_never_leaks_contact_fields_or_values():
+    _engine, db = session()
+    row = listing("private-contact")
+    row.contact_phone = "+359888123456"
+    row.contact_email = "private@example.test"
+    db.add(row)
+    db.commit()
+
+    payload = _build_listings_payload(db)
+    serialized = str(payload).lower()
+
+    assert "contact_phone" not in serialized
+    assert "contact_email" not in serialized
+    assert "+359888123456" not in serialized
+    assert "private@example.test" not in serialized
+
+
 def test_build_listings_payload_counts_canonical_sibling_sources_and_exports_median():
     _engine, db = session()
     primary = listing("primary")

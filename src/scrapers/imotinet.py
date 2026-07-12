@@ -29,6 +29,40 @@ class ImotiNetScraper(BaseScraper):
     def __init__(self, max_pages: int = 50):
         super().__init__("imotinet", self.BASE_URL)
         self.max_pages = max_pages
+
+    @classmethod
+    def parse_detail(cls, soup: BeautifulSoup) -> Dict[str, Any]:
+        offer = soup.select_one("#js-ad-container") or soup.select_one(".real-estate-offer")
+        description = offer.select_one(".text") if offer else None
+        location = offer.select_one(".location") if offer else None
+        agency = soup.select_one(".contact-agency-name")
+        phone = next(
+            (node.get_text(" ", strip=True) for node in soup.select(".hidden-phone") if re.search(r"\d{8,}", node.get_text())),
+            None,
+        )
+        email_link = soup.select_one('a[href^="mailto:"]')
+        images = [
+            urljoin(cls.BASE_URL, image.get("src"))
+            for image in soup.select(".gallery-slider-pics img[src]")
+            if "/web/files/obiavi/" in image.get("src", "")
+        ]
+        coordinates = None
+        map_frame = soup.select_one('iframe[src*="google.com/maps"]')
+        if map_frame:
+            coordinates = re.search(r"q=([0-9.]+),([0-9.]+)", map_frame.get("src", ""))
+            if coordinates and float(coordinates.group(1)) == 0:
+                coordinates = None
+        return {
+            "description_full": description.get_text(" ", strip=True) if description else None,
+            "address": location.get_text(" ", strip=True) if location else None,
+            "latitude": float(coordinates.group(1)) if coordinates else None,
+            "longitude": float(coordinates.group(2)) if coordinates else None,
+            "seller_type": "agency" if agency else None,
+            "seller_name": agency.get_text(" ", strip=True) if agency else None,
+            "contact_phone": phone,
+            "contact_email": email_link.get("href", "")[7:] if email_link else None,
+            "image_urls": images,
+        }
     
     def _get_page_url(self, page: int) -> str:
         """Build page URL."""

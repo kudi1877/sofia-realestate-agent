@@ -8,6 +8,8 @@ Fix: Proper UTF-8 encoding handling and updated selectors for current site struc
 """
 
 import re
+import html
+import json
 from typing import List, Dict, Any, Optional
 from urllib.parse import urljoin
 
@@ -27,6 +29,52 @@ class PropertyBGScraper(BaseScraper):
     def __init__(self, max_pages: int = 30):
         super().__init__("propertybg", self.BASE_URL)
         self.max_pages = max_pages
+
+    @classmethod
+    def parse_detail(cls, soup: BeautifulSoup) -> Dict[str, Any]:
+        description = None
+        offer_image = None
+        for script in soup.select('script[type="application/ld+json"]'):
+            text = script.get_text()
+            if '"@type": "Offer"' not in text and '"@type":"Offer"' not in text:
+                continue
+            try:
+                data = json.loads(text)
+                description = data.get("description")
+                offer_image = data.get("image")
+            except (json.JSONDecodeError, TypeError):
+                desc_match = re.search(r'"description"\s*:\s*"(.*?)"\s*[,}]', text, re.DOTALL)
+                image_match = re.search(r'"image"\s*:\s*"(.*?)"', text)
+                description = html.unescape(desc_match.group(1)) if desc_match else None
+                offer_image = image_match.group(1) if image_match else None
+            break
+
+        location_label = next(
+            (node for node in soup.find_all("span") if node.get_text(" ", strip=True) == "Location"),
+            None,
+        )
+        location = location_label.find_next("b") if location_label else None
+        map_frame = soup.select_one('iframe[src*="google.com/maps"]')
+        coordinates = re.search(r"q=([0-9.]+),([0-9.]+)", map_frame.get("src", "")) if map_frame else None
+        images = [link.get("href") for link in soup.select("#prop_gallery_grid a[href]") if link.get("href")]
+        if offer_image and offer_image not in images:
+            images.insert(0, offer_image)
+        avatar = soup.select_one(".avatar")
+        agent = avatar.find_next("b", class_="font-large") if avatar else None
+        email_link = soup.select_one('a[href^="mailto:"]')
+        return {
+            "description_full": description,
+            "address": location.get_text(" ", strip=True) if location else None,
+            "latitude": float(coordinates.group(1)) if coordinates else None,
+            "longitude": float(coordinates.group(2)) if coordinates else None,
+            "seller_type": "agency",
+            "seller_name": agent.get_text(" ", strip=True) if agent else None,
+            # Listing-agent phone is JS-gated as "show number"; do not copy
+            # the unrelated site-wide header telephone.
+            "contact_phone": None,
+            "contact_email": email_link.get("href", "")[7:] if email_link else None,
+            "image_urls": images,
+        }
     
     def _parse_price(self, text: str) -> tuple[Optional[float], Optional[float]]:
         """Parse price from text."""

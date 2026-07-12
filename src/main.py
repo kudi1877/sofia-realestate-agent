@@ -622,6 +622,19 @@ def cmd_full():
                 availability_db.close()
         rec.set_availability(**availability)
 
+        with rec.step("detail_enrichment"):
+            from src.enrichment.detail_fetcher import enrich_listing_details
+
+            detail_db = get_db()
+            try:
+                detail_summary = enrich_listing_details(detail_db, recorder=rec)
+                logger.info(
+                    f"Detail enrichment completed: {detail_summary['enriched']} enriched, "
+                    f"{detail_summary['failed']} failed"
+                )
+            finally:
+                detail_db.close()
+
         with rec.step("seller_signals"):
             from src.analysis.seller_signals import update_motivated_scores
 
