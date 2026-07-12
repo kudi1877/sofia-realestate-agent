@@ -91,8 +91,16 @@ def cmd_scrape(recorder=None):
     # imoti.net's Latin slugs ("Bankja") and prefixed variants ("гр. Банкя")
     # into one canonical Cyrillic group per place.
     from src.utils.neighborhoods import canonicalize_neighborhood
+    from src.config import MIN_PRICE_EUR
     for listing in all_listings:
         listing['neighborhood'] = canonicalize_neighborhood(listing.get('neighborhood'))
+
+    # Price sanity floor (TIN-472): sub-floor prices are parse artifacts
+    # (a €6 "listing" once made Top Pick of the Day).
+    before = len(all_listings)
+    all_listings = [l for l in all_listings if (l.get('price_eur') or 0) >= MIN_PRICE_EUR]
+    if before - len(all_listings):
+        logger.warning(f"Dropped {before - len(all_listings)} listings below €{MIN_PRICE_EUR:,.0f} price floor")
 
     # Deduplicate listings before saving
     logger.info(f"Total raw listings: {len(all_listings)}")

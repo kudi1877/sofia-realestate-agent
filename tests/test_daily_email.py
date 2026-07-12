@@ -75,11 +75,11 @@ def test_daily_email_uses_shared_session_dedup_and_preserves_shapes(tmp_path, mo
     assert set(context["new_deals"][0]) == {
         "id", "neighborhood", "rooms_text", "area_sqm", "construction_type",
         "floor", "total_floors", "price_eur", "price_per_sqm", "zscore",
-        "savings_eur", "savings_pct", "url",
+        "savings_eur", "savings_pct", "url", "image_url",
     }
     assert set(context["price_drops"][0]) == {
         "id", "neighborhood", "rooms_text", "area_sqm", "old_price",
-        "new_price", "drop_pct", "url",
+        "new_price", "drop_pct", "url", "image_url",
     }
     assert set(context["hot_districts"][0]) == {
         "name", "added", "sold", "avg_price", "velocity_score", "velocity_label",

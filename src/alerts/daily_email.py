@@ -18,7 +18,12 @@ from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.config import ANOMALY_ZSCORE_THRESHOLD, DASHBOARD_DATA_DIR, PRICE_DROP_PCT_THRESHOLD
+from src.config import (
+    ANOMALY_ZSCORE_THRESHOLD,
+    DASHBOARD_DATA_DIR,
+    MIN_PRICE_EUR,
+    PRICE_DROP_PCT_THRESHOLD,
+)
 from src.database.models import Alert, Listing, get_db
 from src.database.repository import ListingRepository
 from src.utils.time import utc_now
@@ -57,6 +62,11 @@ def _unique_listing_clause():
     return (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None))
 
 
+def _sane_price_clause():
+    """Defense in depth vs price-parse artifacts (TIN-472: a €6 'Top Pick')."""
+    return Listing.price_eur >= MIN_PRICE_EUR
+
+
 def _group_medians(db: Session) -> Dict[tuple[str, str], float]:
     grouped = defaultdict(list)
     rows = db.query(
@@ -66,6 +76,7 @@ def _group_medians(db: Session) -> Dict[tuple[str, str], float]:
     ).filter(
         Listing.is_active.is_(True),
         _unique_listing_clause(),
+        _sane_price_clause(),
         Listing.price_per_sqm_eur > 0,
     ).all()
     for neighborhood, property_type, price_per_sqm in rows:
@@ -99,6 +110,7 @@ def _deal_payload(listing: Listing, group_price: float) -> Dict[str, Any]:
         "savings_eur": _fmt_price(max(savings_eur, 0)),
         "savings_pct": f"{max(savings_pct, 0):.1f}",
         "url": listing.url or "#",
+        "image_url": listing.image_url or None,
     }
 
 
@@ -109,6 +121,7 @@ def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
     rows = db.query(Listing).join(Alert).filter(
         Listing.is_active.is_(True),
         _unique_listing_clause(),
+        _sane_price_clause(),
         Listing.first_seen >= cutoff,
         Alert.alert_type == "underpriced",
         Alert.zscore.isnot(None),
@@ -119,6 +132,7 @@ def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
         candidates = db.query(Listing).filter(
             Listing.is_active.is_(True),
             _unique_listing_clause(),
+            _sane_price_clause(),
             Listing.first_seen >= cutoff,
             Listing.price_per_sqm_eur > 0,
         ).all()
@@ -155,6 +169,7 @@ def _query_price_drops(
             "new_price": _fmt_price(listing.price_eur),
             "drop_pct": f"{((listing.first_price_eur - listing.price_eur) / listing.first_price_eur * 100):.1f}",
             "url": listing.url or "#",
+            "image_url": listing.image_url or None,
         }
         for listing in rows
     ]
@@ -221,6 +236,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
     alert_row = db.query(Listing, Alert).join(Alert).filter(
         Listing.is_active.is_(True),
         _unique_listing_clause(),
+        _sane_price_clause(),
         Listing.property_type == "apartment",
         Alert.zscore < ANOMALY_ZSCORE_THRESHOLD,
         Alert.savings_pct > 0,
@@ -234,6 +250,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
         candidates = db.query(Listing).filter(
             Listing.is_active.is_(True),
             _unique_listing_clause(),
+            _sane_price_clause(),
             Listing.property_type == "apartment",
             Listing.price_per_sqm_eur > 0,
             Listing.area_sqm > 30,

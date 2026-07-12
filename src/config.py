@@ -21,6 +21,10 @@ SCRAPE_DELAY_MAX = float(os.getenv("SCRAPE_DELAY_MAX", "3.0"))
 MARK_INACTIVE_MIN_RATIO = float(os.getenv("MARK_INACTIVE_MIN_RATIO", "0.5"))
 SOLD_AFTER_DAYS = int(os.getenv("SOLD_AFTER_DAYS", "14"))
 
+# Sanity floor: nothing in Sofia genuinely sells below this — prices under it
+# are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).
+MIN_PRICE_EUR = float(os.getenv("MIN_PRICE_EUR", "5000"))
+
 # Analysis settings
 ANOMALY_ZSCORE_THRESHOLD = float(os.getenv("ANOMALY_ZSCORE_THRESHOLD", "-1.5"))
 ANOMALY_PCT_THRESHOLD = float(os.getenv("ANOMALY_PCT_THRESHOLD", "0.85"))

@@ -35,6 +35,9 @@ _SPECIAL_LATIN = {
 # City prefix sometimes embedded in slugs: "Sofija Studentski Grad".
 _CITY_PREFIX_RE = re.compile(r"^sofi[jy]?a\s+", re.IGNORECASE)
 
+# Ad-card text that is definitely not a place name.
+_JUNK_RE = re.compile(r"снимки|продава|обява|€|лв\.|кв\.?\s*м", re.IGNORECASE)
+
 # Reverse transliteration, imoti.net's scheme. Digraphs/trigraphs first.
 _TRANSLIT = [
     ("sht", "щ"), ("zh", "ж"), ("ch", "ч"), ("sh", "ш"),
@@ -98,6 +101,12 @@ def canonicalize_neighborhood(name: str | None) -> str:
 
     cleaned = _PREFIX_RE.sub("", name.strip()).strip().rstrip(".,;: ")
     if not cleaned:
+        return "Unknown"
+
+    # Junk guard (TIN-472): some parse fallbacks stored entire ad-card text
+    # as the "neighborhood" ("Снимки 8 продава Парцел, 4500 м 2 София, …").
+    # Real Sofia neighborhood names are short and never contain ad verbs.
+    if len(cleaned) > 40 or _JUNK_RE.search(cleaned):
         return "Unknown"
 
     if not _CYRILLIC_RE.search(cleaned):
