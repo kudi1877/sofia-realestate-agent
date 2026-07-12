@@ -27,10 +27,23 @@ from src.database.models import Listing
 from src.utils.time import utc_now
 
 
+Exposure = Literal[
+    "south", "north", "east", "west",
+    "southeast", "southwest", "northeast", "northwest",
+]
+
+# Trap keys that disqualify a listing from the deal feed outright: the "price"
+# is not a price for the whole, unencumbered property.
+HARD_TRAP_KEYS = ("compensation_deal", "ideal_parts", "swap_only", "building_right_only")
+
+# Softer traps surfaced as warnings on the card/detail view.
+SOFT_TRAP_KEYS = ("non_residential_status", "encumbrance", "tenanted")
+
+
 class ExtractedAttributes(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    exposure: List[Literal["south", "north", "east", "west"]] = Field(default_factory=list)
+    exposure: List[Exposure] = Field(default_factory=list)
     view: str | None = Field(default=None, max_length=160)
     renovation_state: Literal["turnkey", "renovated", "needs_renovation", "unfinished", "unknown"]
     act16: bool | None
@@ -41,10 +54,74 @@ class ExtractedAttributes(BaseModel):
     balcony_count: int | None = Field(default=None, ge=0, le=20)
     red_flags: List[str] = Field(default_factory=list, max_length=12)
 
+    # ── Hidden-trap detection (TIN-516) ──────────────────────────────────────
+    # Net living area when the text distinguishes it from the headline m²
+    # (чиста площ vs обща/застроена площ incl. balconies/common parts).
+    net_area_sqm: float | None = Field(default=None, gt=5, lt=2000)
+    gross_area_includes: List[
+        Literal["common_parts", "balcony", "terrace", "attic", "basement", "garage", "yard"]
+    ] = Field(default_factory=list)
+    # "Plot for sale" actually seeking builder compensation (обезщетение).
+    compensation_deal: bool = False
+    # Selling идеални части — a share of the property, not the whole.
+    ideal_parts: bool = False
+    # Право на строеж only — building right without the land.
+    building_right_only: bool = False
+    # Статут на ателие/таван/офис — priced like a home, legally not a dwelling.
+    non_residential_status: bool = False
+    construction_stage: Literal["completed", "act15", "act14", "off_plan", "unknown"] = "unknown"
+    # С наематели — tenant in place.
+    tenanted: bool = False
+    # Възбрана/ипотека/тежести mentioned in the text.
+    encumbrance: bool = False
+    # Замяна — swap offer rather than a sale.
+    swap_only: bool = False
+    # For plots: земеделска земя / извън регулация needs status conversion.
+    land_status: Literal["regulated", "agricultural", "unregulated", "unknown"] = "unknown"
+
     @field_validator("exposure")
     @classmethod
     def unique_exposure(cls, value):
         return list(dict.fromkeys(value))
+
+    @field_validator("act16", "has_elevator", "furnished", mode="before")
+    @classmethod
+    def unknown_to_null(cls, value):
+        # Models frequently answer the string "unknown" for nullable booleans
+        # (14 of 300 extractions failed on this in the first run, TIN-515).
+        if isinstance(value, str) and value.strip().lower() in ("unknown", "null", ""):
+            return None
+        return value
+
+    @field_validator("net_area_sqm", "balcony_count", mode="before")
+    @classmethod
+    def junk_numeric_to_null(cls, value):
+        # Harden against malformed tool output fragments observed in run 1.
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned.replace(".", "", 1).isdigit():
+                return None
+        return value
+
+    def trap_flags(self) -> List[str]:
+        hard = [key for key in HARD_TRAP_KEYS if getattr(self, key)]
+        soft = [key for key in SOFT_TRAP_KEYS if getattr(self, key)]
+        if self.land_status in ("agricultural", "unregulated"):
+            soft.append(f"land_{self.land_status}")
+        if self.construction_stage in ("act14", "act15", "off_plan"):
+            soft.append(f"stage_{self.construction_stage}")
+        return hard + soft
+
+
+def hard_traps(llm_extract_json: str | None) -> List[str]:
+    """Hard disqualifiers from a persisted llm_extract JSON blob (exporter use)."""
+    if not llm_extract_json:
+        return []
+    try:
+        payload = json.loads(llm_extract_json)
+    except (TypeError, ValueError):
+        return []
+    return [key for key in HARD_TRAP_KEYS if payload.get(key)]
 
 
 @dataclass
@@ -60,9 +137,22 @@ class ExtractionProvider(Protocol):
     def extract(self, description: str) -> ProviderResult: ...
 
 
-SYSTEM_PROMPT = """Extract only explicitly stated real-estate attributes from the listing description.
+SYSTEM_PROMPT = """Extract only explicitly stated real-estate attributes from the Bulgarian listing description.
 Use null/unknown when evidence is absent. Do not infer Act 16, elevator, parking, furnishing, or exposure.
-Keep view/heating/red-flag text concise and in English. Return exactly the supplied schema."""
+Keep view/heating/red-flag text concise and in English. Return exactly the supplied schema.
+
+Hunt for HIDDEN TRAPS a buyer would want flagged (set false only when truly absent):
+- net_area_sqm: if the text distinguishes чиста/жилищна площ from the headline обща/застроена площ (which may include балкони, тераси, общи части, таван, мазе), record the NET living area and list what the gross figure includes in gross_area_includes.
+- compensation_deal: the seller seeks обезщетение (builder compensation / срещу обезщетение) rather than a straight cash sale.
+- ideal_parts: selling идеални части — a fractional share, not the whole property.
+- building_right_only: право на строеж / отстъпено право на строеж without land ownership.
+- non_residential_status: статут на ателие, таван, офис or similar — not legally a dwelling (жилище).
+- construction_stage: акт 14 / акт 15 = act14/act15; на зелено / в строеж without a completion act = off_plan; акт 16 or existing old building = completed.
+- tenanted: с наематели / отдаден под наем — tenant currently in place.
+- encumbrance: възбрана, ипотека, тежести mentioned.
+- swap_only: замяна — the owner wants a swap, not (only) a sale.
+- land_status (plots): в регулация = regulated; земеделска земя / нива = agricultural; извън регулация = unregulated.
+Anything else suspicious goes in red_flags."""
 
 TOOL_NAME = "record_listing_attributes"
 
@@ -193,8 +283,13 @@ def extract_listing_attributes(
     provider_name: str = LLM_PROVIDER,
     max_per_run: int = LLM_MAX_PER_RUN,
     budget_usd: float = LLM_DAILY_BUDGET_USD,
+    rows: List[Listing] | None = None,
 ) -> Dict[str, Any]:
-    """Extract and persist validated attributes with one retry per listing."""
+    """Extract and persist validated attributes with one retry per listing.
+
+    `rows` lets a caller (e.g. the TIN-516 backfill) supply its own ordered,
+    availability-gated candidate list; default selection is unchanged.
+    """
     if provider is None:
         provider = build_provider(provider_name)
     if provider is None:
@@ -208,7 +303,7 @@ def extract_listing_attributes(
             "skipped": "provider_off",
         }
 
-    rows = (
+    rows = rows if rows is not None else (
         db.query(Listing)
         .filter(
             Listing.is_active.is_(True),

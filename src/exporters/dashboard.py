@@ -42,6 +42,20 @@ from src.analysis.seller_signals import calculate_market_signals, market_pulse_l
 from src.analysis.rental_market import gross_yield_pct, rent_stats_lookup
 from src.analysis.hedonic import effective_deal_engine, is_hedonic_deal
 from src.analysis.authenticity import passes_authenticity_gate
+from src.enrichment.llm_extract import ExtractedAttributes, hard_traps
+
+
+def _parse_extract(llm_extract_json: str | None) -> Dict[str, Any]:
+    """Persisted extraction JSON → dict with computed _trap_flags (or {})."""
+    if not llm_extract_json:
+        return {}
+    try:
+        attributes = ExtractedAttributes.model_validate(json.loads(llm_extract_json))
+    except Exception:
+        return {}
+    payload = attributes.model_dump()
+    payload["_trap_flags"] = attributes.trap_flags()
+    return payload
 from src.analysis.data_health import evaluate_data_health, load_previous_runs
 from src.database.models import (
     Listing,
@@ -142,6 +156,24 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                 and alert_zscore <= ANOMALY_ZSCORE_THRESHOLD
             )
         )
+        # Hidden traps (TIN-516): a "deal" that is обезщетение, идеални части,
+        # замяна or building-right-only is not a purchasable bargain — the
+        # headline price doesn't buy the whole property.
+        listing_hard_traps = hard_traps(l.llm_extract)
+        deal_disqualified = None
+        if is_deal and listing_hard_traps:
+            is_deal = False
+            deal_disqualified = listing_hard_traps
+        extract_payload = _parse_extract(l.llm_extract)
+        trap_list = extract_payload.get("_trap_flags") or None
+        net_area = extract_payload.get("net_area_sqm")
+        real_price_per_sqm = (
+            round(float(l.price_eur) / float(net_area), 2)
+            if net_area and l.price_eur and float(net_area) > 0
+            # Only meaningful when net differs from the headline area by >10%.
+            and l.area_sqm and abs(float(net_area) - float(l.area_sqm)) / float(l.area_sqm) > 0.10
+            else None
+        )
         if deal_engine.startswith("hedonic") and l.residual_pct is not None:
             savings_pct = round(max(0.0, -float(l.residual_pct)), 1)
         zscore = alert_zscore if alert_zscore is not None else _group_zscore(l)
@@ -237,6 +269,11 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     "act16": l.act16,
                     "has_elevator": l.has_elevator,
                     "parking": l.parking,
+                    # Hidden traps (TIN-516)
+                    "traps": trap_list,
+                    "deal_disqualified": deal_disqualified,
+                    "net_area_sqm": net_area,
+                    "real_price_per_sqm": real_price_per_sqm,
                 }
             )
         )
