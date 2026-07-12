@@ -47,6 +47,7 @@ def listing(source_id):
         is_duplicate=False,
         first_seen=datetime(2026, 1, 1),
         last_seen=datetime(2026, 1, 2),
+        availability_checked_at=datetime(2026, 1, 2, 12, 30),
     )
 
 
@@ -102,6 +103,7 @@ def test_build_listings_payload_eager_loads_alerts_and_preserves_latest_values()
     assert by_source["export-1"]["price_changes"] == 1
     assert by_source["export-1"]["site_count"] == 1
     assert by_source["export-1"]["last_seen"] == "2026-01-02T00:00:00"
+    assert by_source["export-1"]["availability_checked_at"] == "2026-01-02T12:30:00"
     assert alert_selects == 1
 
 

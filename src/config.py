@@ -20,6 +20,9 @@ SCRAPE_DELAY_MIN = float(os.getenv("SCRAPE_DELAY_MIN", "1.0"))
 SCRAPE_DELAY_MAX = float(os.getenv("SCRAPE_DELAY_MAX", "3.0"))
 MARK_INACTIVE_MIN_RATIO = float(os.getenv("MARK_INACTIVE_MIN_RATIO", "0.5"))
 SOLD_AFTER_DAYS = int(os.getenv("SOLD_AFTER_DAYS", "14"))
+PING_MAX_PER_RUN = int(os.getenv("PING_MAX_PER_RUN", "400"))
+PING_RECENT_DAYS = int(os.getenv("PING_RECENT_DAYS", "14"))
+PING_DELAY_SECONDS = float(os.getenv("PING_DELAY_SECONDS", "2.0"))
 
 # Sanity floor: nothing in Sofia genuinely sells below this — prices under it
 # are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).

@@ -75,6 +75,7 @@ class RunRecorder:
     sources: List[SourceResult] = field(default_factory=list)
     totals: Dict[str, int] = field(default_factory=dict)
     analysis: Dict[str, Any] = field(default_factory=dict)
+    availability: Dict[str, int] = field(default_factory=dict)
     digest: Dict[str, Any] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
 
@@ -102,6 +103,14 @@ class RunRecorder:
             "anomalies": anomalies,
             "neighborhoods_with_stats": neighborhoods,
             "groups_used": groups_used,
+        }
+
+    def set_availability(self, *, pinged: int, live: int, gone: int, unknown: int) -> None:
+        self.availability = {
+            "pinged": pinged,
+            "live": live,
+            "gone": gone,
+            "unknown": unknown,
         }
 
     def set_digest(
@@ -159,6 +168,7 @@ class RunRecorder:
             "sources": [asdict(s) for s in self.sources],
             "totals": self.totals,
             "analysis": self.analysis,
+            "availability": self.availability,
             "digest": self.digest,
             "errors": self.errors,
         }

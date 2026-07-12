@@ -78,6 +78,7 @@ class Listing(Base):
     # sets last_seen explicitly on every real re-scrape — the only writer.
     last_seen = Column(DateTime, default=func.now())
     is_active = Column(Boolean, default=True)
+    availability_checked_at = Column(DateTime)
     
     # Relationships
     price_history = relationship("PriceHistory", back_populates="listing", cascade="all, delete-orphan")
@@ -216,6 +217,7 @@ def init_db():
             ("sold_date", "DATETIME"),
             ("days_on_market", "INTEGER"),
             ("image_url", "TEXT"),
+            ("availability_checked_at", "DATETIME"),
         ],
     }
 

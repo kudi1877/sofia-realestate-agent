@@ -604,6 +604,18 @@ def cmd_full():
         with rec.step("scrape"):
             scraped = cmd_scrape(recorder=rec)
 
+        # Confirm selected high-value/recent ads directly without touching
+        # last_seen, whose meaning remains "observed in a search scrape".
+        with rec.step("availability"):
+            from src.enrichment.availability import ping_availability
+
+            availability_db = get_db()
+            try:
+                availability = ping_availability(availability_db)
+            finally:
+                availability_db.close()
+        rec.set_availability(**availability)
+
         # Step 2: Analyze (recompute z-scores; produce alerts)
         with rec.step("analyze"):
             anomalies = cmd_analyze()

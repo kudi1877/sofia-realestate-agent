@@ -163,6 +163,11 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     # for the user.
                     "first_seen": l.first_seen.isoformat() if l.first_seen else None,
                     "last_seen": l.last_seen.isoformat() if l.last_seen else None,
+                    "availability_checked_at": (
+                        l.availability_checked_at.isoformat()
+                        if l.availability_checked_at
+                        else None
+                    ),
                     # Soft-depreciation flag — true when the listing is still on the
                     # source site (we re-confirmed it in the latest scrape). False
                     # means we haven't seen it for ≥1 scrape but it's within 30d.
