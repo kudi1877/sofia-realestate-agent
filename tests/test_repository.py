@@ -80,6 +80,29 @@ def test_upsert_commit_false_preserves_price_history_rows():
     assert [row.price_eur for row in history] == [100000, 100000]
 
 
+def test_upsert_serializes_list_values_to_json():
+    # Scrapers hand image_urls as a Python list; SQLite can't bind lists
+    # ("type 'list' is not supported" killed new-listing saves on the first
+    # Phase 2 run). upsert must JSON-encode list/dict values.
+    db = session()
+    repo = ListingRepository(db)
+
+    created = repo.upsert(
+        listing_data(
+            source_id="imgs-1",
+            image_urls=["https://a.test/1.jpg", "https://a.test/2.jpg"],
+        )
+    )
+    assert created.id is not None
+    assert isinstance(created.image_urls, str)
+    import json as _json
+
+    assert _json.loads(created.image_urls) == [
+        "https://a.test/1.jpg",
+        "https://a.test/2.jpg",
+    ]
+
+
 def test_upsert_ignores_non_column_metadata_keys():
     # Dedup attaches 'duplicate_sources' (a list) to winner dicts; creating a
     # NEW listing via Listing(**data) raised TypeError on it and killed nearly

@@ -736,19 +736,27 @@ def cmd_full():
             finally:
                 hash_db.close()
 
+        # Non-fatal by design (same rule as the alerts step, TIN-447): a
+        # missing SDK / dead endpoint / budget error in LLM extraction must
+        # never block analysis and the dashboard export. It killed the whole
+        # 2026-07-12 manual run before hedonic/analyze/export.
         with rec.step("llm_extraction"):
-            from src.enrichment.llm_extract import extract_listing_attributes
-
-            llm_db = get_db()
             try:
-                llm_summary = extract_listing_attributes(llm_db)
-                logger.info(
-                    f"LLM extraction: provider={llm_summary['provider']}, "
-                    f"extracted={llm_summary['extracted']}, failed={llm_summary['failed']}, "
-                    f"spent=${llm_summary['spent_usd']:.4f}"
-                )
-            finally:
-                llm_db.close()
+                from src.enrichment.llm_extract import extract_listing_attributes
+
+                llm_db = get_db()
+                try:
+                    llm_summary = extract_listing_attributes(llm_db)
+                    logger.info(
+                        f"LLM extraction: provider={llm_summary['provider']}, "
+                        f"extracted={llm_summary['extracted']}, failed={llm_summary['failed']}, "
+                        f"spent=${llm_summary['spent_usd']:.4f}"
+                    )
+                finally:
+                    llm_db.close()
+            except Exception as e:
+                logger.error(f"LLM extraction failed (continuing pipeline): {e}")
+                rec.add_error(f"llm_extraction: {str(e)[:200]}")
 
         with rec.step("seller_signals"):
             from src.analysis.seller_signals import update_motivated_scores

@@ -1,5 +1,6 @@
 """Repository layer for database operations."""
 
+import json
 from typing import List, Optional, Dict, Any
 from datetime import timedelta
 from sqlalchemy.orm import Session
@@ -33,7 +34,14 @@ class ListingRepository:
         # like 'duplicate_sources' to winner dicts, and Listing(**data) raises
         # TypeError on unknown kwargs (killed ~all new-listing saves on the
         # 2026-07-12 nightly run; only 30 of 7,730 scraped rows saved).
-        listing_data = {k: v for k, v in listing_data.items() if hasattr(Listing, k)}
+        # Also JSON-encode list/dict values: Text columns like image_urls
+        # receive Python lists from scrapers, and SQLite can't bind those
+        # ("type 'list' is not supported" — same run, same lesson).
+        listing_data = {
+            k: (json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v)
+            for k, v in listing_data.items()
+            if hasattr(Listing, k)
+        }
 
         existing = self.get_by_source_id(
             listing_data["source"],
