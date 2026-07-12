@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from src.config import (
     ANOMALY_ZSCORE_THRESHOLD,
+    DEAL_ENGINE,
     DASHBOARD_REPO_PATH,
     DASHBOARD_DATA_DIR,
     DASHBOARD_AUTO_PUSH,
@@ -38,6 +39,7 @@ from src.analysis.anomaly import calculate_neighborhood_stats
 from src.analysis.imotbg_benchmark import fetch_benchmark
 from src.analysis.seller_signals import calculate_market_signals, market_pulse_line
 from src.analysis.rental_market import gross_yield_pct, rent_stats_lookup
+from src.analysis.hedonic import effective_deal_engine, is_hedonic_deal
 from src.analysis.data_health import evaluate_data_health, load_previous_runs
 from src.database.models import (
     Listing,
@@ -120,6 +122,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
 
     listings: List[Dict[str, Any]] = []
     rental_stats = rent_stats_lookup(db)
+    deal_engine = effective_deal_engine(DEAL_ENGINE)
     for l in rows:
         alert_zscore, savings_pct = (
             _latest_alert_values_for_listing(l)
@@ -129,10 +132,16 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         # is_deal is the single source of truth for deal badges/feeds: only
         # alert-qualified outliers. zscore alone no longer implies "deal".
         is_deal = (
-            l.listing_kind == "sale"
-            and alert_zscore is not None
-            and alert_zscore <= ANOMALY_ZSCORE_THRESHOLD
+            is_hedonic_deal(l)
+            if deal_engine.startswith("hedonic")
+            else (
+                l.listing_kind == "sale"
+                and alert_zscore is not None
+                and alert_zscore <= ANOMALY_ZSCORE_THRESHOLD
+            )
         )
+        if deal_engine.startswith("hedonic") and l.residual_pct is not None:
+            savings_pct = round(max(0.0, -float(l.residual_pct)), 1)
         zscore = alert_zscore if alert_zscore is not None else _group_zscore(l)
         source_links = links_by_canonical.get(l.canonical_id, {})
         percentile = (
@@ -203,6 +212,14 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     "is_active": bool(l.is_active),
                     "motivated_score": int(l.motivated_score or 0),
                     "gross_yield_pct": gross_yield_pct(l, rental_stats),
+                    "predicted_price_per_sqm": l.predicted_price_per_sqm,
+                    "residual_pct": l.residual_pct,
+                    "hedonic_contributions": (
+                        json.loads(l.hedonic_contributions)
+                        if l.hedonic_contributions
+                        else None
+                    ),
+                    "deal_engine": deal_engine,
                     "auction_start": l.auction_start.isoformat() if l.auction_start else None,
                     "auction_end": l.auction_end.isoformat() if l.auction_end else None,
                     "bailiff_name": l.bailiff_name,

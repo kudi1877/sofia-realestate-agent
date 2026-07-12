@@ -139,3 +139,23 @@ def test_top_pick_rejects_implausible_apartment_price_per_sqm():
 
     assert top_pick["price_per_sqm"] == "1 000"
     assert top_pick["url"].endswith("/sane")
+
+
+def test_daily_email_uses_hedonic_expectation_when_enabled(monkeypatch):
+    db = session()
+    row = listing("hedonic", 1600)
+    row.predicted_price_per_sqm = 2000
+    row.residual_pct = -20
+    db.add(row)
+    db.commit()
+
+    monkeypatch.setattr(daily_email, "DEAL_ENGINE", "hedonic")
+    monkeypatch.setattr(daily_email, "effective_deal_engine", lambda _requested: "hedonic")
+
+    deals = daily_email._query_new_deals(db)
+    top_pick = daily_email._query_top_pick(db)
+
+    assert deals[0]["zscore"] == "N/A"
+    assert deals[0]["savings_pct"] == "20.0"
+    assert top_pick["savings_pct"] == "20"
+    assert "model expectation" in top_pick["reasoning"]

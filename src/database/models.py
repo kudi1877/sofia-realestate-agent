@@ -94,6 +94,9 @@ class Listing(Base):
     auction_end = Column(DateTime)
     bailiff_name = Column(Text)
     case_number = Column(String(100))
+    predicted_price_per_sqm = Column(Float)
+    residual_pct = Column(Float)
+    hedonic_contributions = Column(Text)
     
     # Metadata
     first_seen = Column(DateTime, default=func.now())
@@ -293,6 +296,9 @@ def init_db():
             ("auction_end", "DATETIME"),
             ("bailiff_name", "TEXT"),
             ("case_number", "VARCHAR(100)"),
+            ("predicted_price_per_sqm", "FLOAT"),
+            ("residual_pct", "FLOAT"),
+            ("hedonic_contributions", "TEXT"),
             ("description_full", "TEXT"),
             ("address", "TEXT"),
             ("latitude", "FLOAT"),

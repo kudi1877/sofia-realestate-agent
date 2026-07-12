@@ -120,6 +120,31 @@ def test_build_listings_payload_eager_loads_alerts_and_preserves_latest_values()
     assert alert_selects == 1
 
 
+def test_build_listings_payload_can_publish_hedonic_deals(monkeypatch):
+    _engine, db = session()
+    row = listing("hedonic-deal")
+    row.predicted_price_per_sqm = 2500
+    row.residual_pct = -20
+    row.hedonic_contributions = '[{"feature": "area", "impact_pct": -8.5}]'
+    db.add(row)
+    db.commit()
+
+    monkeypatch.setattr("src.exporters.dashboard.DEAL_ENGINE", "hedonic")
+    monkeypatch.setattr(
+        "src.exporters.dashboard.effective_deal_engine",
+        lambda _requested: "hedonic",
+    )
+
+    exported = _build_listings_payload(db)["listings"][0]
+
+    assert exported["is_deal"] is True
+    assert exported["savings_pct"] == 20.0
+    assert exported["predicted_price_per_sqm"] == 2500
+    assert exported["residual_pct"] == -20
+    assert exported["hedonic_contributions"] == [{"feature": "area", "impact_pct": -8.5}]
+    assert exported["deal_engine"] == "hedonic"
+
+
 def test_build_listings_payload_omits_none_listing_values():
     engine, db = session()
     row = listing("export-no-alert")

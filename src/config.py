@@ -45,6 +45,14 @@ LLM_DAILY_BUDGET_USD = float(os.getenv("LLM_DAILY_BUDGET_USD", "2"))
 ANTHROPIC_INPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_INPUT_USD_PER_MTOK", "1"))
 ANTHROPIC_OUTPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_OUTPUT_USD_PER_MTOK", "5"))
 
+# Hedonic model. sklearn is used when available; the repository's NumPy
+# fallback keeps training functional in the minimal production venv.
+HEDONIC_MODEL_DIR = Path(os.getenv("HEDONIC_MODEL_DIR", str(DATA_DIR / "models"))).expanduser()
+HEDONIC_TRAIN_WEEKDAY = int(os.getenv("HEDONIC_TRAIN_WEEKDAY", "0"))
+HEDONIC_DEAL_RESIDUAL_PCT = float(os.getenv("HEDONIC_DEAL_RESIDUAL_PCT", "-15"))
+HEDONIC_MAX_TRAIN_PRICE_PER_SQM = float(os.getenv("HEDONIC_MAX_TRAIN_PRICE_PER_SQM", "15000"))
+DEAL_ENGINE = os.getenv("DEAL_ENGINE", "zscore").strip().lower()
+
 # Sanity floor: nothing in Sofia genuinely sells below this — prices under it
 # are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).
 MIN_PRICE_EUR = float(os.getenv("MIN_PRICE_EUR", "5000"))

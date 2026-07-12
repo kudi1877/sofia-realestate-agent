@@ -5,4 +5,5 @@ __pycache__/
 data/email_preview.html
 data/latest_digest.json
 data/logs/
+data/models/
 .DS_Store

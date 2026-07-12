@@ -686,6 +686,19 @@ def cmd_full():
             finally:
                 signals_db.close()
 
+        with rec.step("hedonic"):
+            from src.analysis.hedonic import weekly_train_and_score
+
+            hedonic_db = get_db()
+            try:
+                hedonic_summary = weekly_train_and_score(hedonic_db)
+                logger.info(
+                    f"Hedonic: backend={hedonic_summary['backend']}, "
+                    f"scored={hedonic_summary['scored']}, trained={hedonic_summary['trained']}"
+                )
+            finally:
+                hedonic_db.close()
+
         # Step 2: Analyze (recompute z-scores; produce alerts)
         with rec.step("analyze"):
             anomalies = cmd_analyze()

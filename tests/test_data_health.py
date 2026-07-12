@@ -173,3 +173,41 @@ def test_run_recorder_serializes_data_health_without_changing_run_status():
 
     assert recorder.status == "running"
     assert recorder.to_dict()["data_health"]["status"] == "red"
+
+
+def test_data_health_publishes_hedonic_holdout_and_benchmark_gap(monkeypatch, tmp_path):
+    db = session()
+    db.add_all(
+        [
+            listing(
+                f"model-{index}",
+                neighborhood="Люлин",
+                predicted_price_per_sqm=3000,
+            )
+            for index in range(20)
+        ]
+    )
+    healthy_daily_artifacts(db, tmp_path)
+    db.commit()
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "hedonic-20260712.metrics.json").write_text(
+        '{"model_mae_pct": 18.5, "baseline_mae_pct": 24.0, "ship_gate_passed": true}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.analysis.data_health.HEDONIC_MODEL_DIR", model_dir)
+
+    health = evaluate_data_health(
+        db,
+        {"neighborhoods": [{"neighborhood": "Люлин", "imotbg_avg_price_per_sqm": 1800}]},
+        current_sources=[],
+        previous_runs=[],
+        data_dir=tmp_path,
+        now=NOW,
+    )
+    checks = {check["key"]: check for check in health["checks"]}
+
+    assert checks["hedonic_holdout"]["value"] == 18.5
+    assert checks["hedonic_holdout"]["status"] == "green"
+    assert checks["hedonic_benchmark"]["status"] == "red"
+    assert checks["hedonic_benchmark"]["value"] == 1

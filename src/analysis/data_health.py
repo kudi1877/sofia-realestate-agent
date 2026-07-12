@@ -16,7 +16,9 @@ from src.config import (
     DATA_HEALTH_DRIFT_PCT,
     DATA_HEALTH_IMAGE_ERROR_PCT,
     DATA_HEALTH_IMAGE_WARN_PCT,
+    HEDONIC_MODEL_DIR,
 )
+from src.analysis.hedonic import latest_metrics
 from src.database.models import Listing, NeighborhoodStatsHistory
 from src.utils.time import utc_now
 
@@ -51,6 +53,7 @@ def evaluate_data_health(
     _source_drift_checks(checks, source_metrics, previous_runs)
     _image_coverage_check(checks, db)
     _daily_write_checks(checks, db, data_dir, now)
+    _hedonic_checks(checks, db, market_payload)
 
     statuses = {check["status"] for check in checks}
     overall = "red" if "red" in statuses else "amber" if "amber" in statuses else "green"
@@ -239,6 +242,85 @@ def _daily_write_checks(
         )
     )
 
+
+def _hedonic_checks(
+    checks: List[Dict[str, Any]],
+    db: Session,
+    market_payload: Dict[str, Any],
+) -> None:
+    metrics = latest_metrics(HEDONIC_MODEL_DIR)
+    if metrics is None:
+        checks.append(
+            _check(
+                key="hedonic_holdout",
+                label="Hedonic holdout MAE",
+                status="amber",
+                value=0,
+                unit="%",
+                detail="No trained model yet; first pipeline run will bootstrap one",
+            )
+        )
+        return
+
+    model_mae = float(metrics["model_mae_pct"])
+    baseline_mae = float(metrics["baseline_mae_pct"])
+    metric_paths = sorted(HEDONIC_MODEL_DIR.glob("hedonic-*.metrics.json"))
+    prior_mae = None
+    if len(metric_paths) >= 2:
+        try:
+            prior_mae = float(json.loads(metric_paths[-2].read_text(encoding="utf-8"))["model_mae_pct"])
+        except (OSError, ValueError, KeyError, TypeError):
+            prior_mae = None
+    drift_pct = ((model_mae - prior_mae) / prior_mae * 100) if prior_mae else None
+    status = "red" if not metrics.get("ship_gate_passed") or (drift_pct is not None and drift_pct > 20) else "green"
+    checks.append(
+        _check(
+            key="hedonic_holdout",
+            label="Hedonic holdout MAE",
+            status=status,
+            value=round(model_mae, 2),
+            unit="%",
+            detail=(
+                f"baseline {baseline_mae:.2f}%; drift {drift_pct:+.1f}%"
+                if drift_pct is not None
+                else f"baseline {baseline_mae:.2f}%; collecting weekly drift"
+            ),
+        )
+    )
+
+    predicted = defaultdict(list)
+    rows = db.query(Listing.neighborhood, Listing.predicted_price_per_sqm).filter(
+        Listing.listing_kind == "sale",
+        Listing.property_type == "apartment",
+        Listing.is_active.is_(True),
+        (Listing.is_duplicate.is_(False)) | (Listing.is_duplicate.is_(None)),
+        Listing.predicted_price_per_sqm.isnot(None),
+    ).all()
+    for neighborhood, value in rows:
+        predicted[neighborhood].append(float(value))
+    benchmark_rows = {
+        row.get("neighborhood"): row.get("imotbg_avg_price_per_sqm")
+        for row in market_payload.get("neighborhoods", [])
+    }
+    gaps = []
+    for neighborhood, values in predicted.items():
+        benchmark = benchmark_rows.get(neighborhood)
+        if len(values) < 20 or not benchmark:
+            continue
+        model_average = sum(values) / len(values)
+        delta = (model_average - float(benchmark)) / float(benchmark) * 100
+        if abs(delta) > 40:
+            gaps.append(f"{neighborhood} {delta:+.0f}%")
+    checks.append(
+        _check(
+            key="hedonic_benchmark",
+            label="Hedonic neighborhood benchmark gaps",
+            status="red" if gaps else "green",
+            value=len(gaps),
+            unit="flags",
+            detail=", ".join(gaps[:5]) if gaps else "All 20+ listing model averages within +/-40%",
+        )
+    )
 
 def _check(
     *,

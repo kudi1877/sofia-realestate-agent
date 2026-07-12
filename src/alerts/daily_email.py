@@ -21,12 +21,15 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.config import (
     ANOMALY_ZSCORE_THRESHOLD,
     DASHBOARD_DATA_DIR,
+    DEAL_ENGINE,
+    HEDONIC_DEAL_RESIDUAL_PCT,
     MAX_APARTMENT_AREA_SQM,
     MIN_APARTMENT_AREA_SQM,
     MIN_APARTMENT_PRICE_PER_SQM_EUR,
     MIN_PRICE_EUR,
     PRICE_DROP_PCT_THRESHOLD,
 )
+from src.analysis.hedonic import effective_deal_engine
 from src.database.models import Alert, Listing, get_db
 from src.database.repository import ListingRepository
 from src.utils.time import utc_now
@@ -100,7 +103,7 @@ def _group_medians(db: Session) -> Dict[tuple[str, str], float]:
     return {key: float(median(prices)) for key, prices in grouped.items()}
 
 
-def _deal_payload(listing: Listing, group_price: float) -> Dict[str, Any]:
+def _deal_payload(listing: Listing, group_price: float, *, hedonic: bool = False) -> Dict[str, Any]:
     price_per_sqm = float(listing.price_per_sqm_eur or 0)
     savings_eur = (
         (group_price - price_per_sqm) * float(listing.area_sqm or 1)
@@ -122,7 +125,7 @@ def _deal_payload(listing: Listing, group_price: float) -> Dict[str, Any]:
         "total_floors": listing.total_floors,
         "price_eur": _fmt_price(listing.price_eur),
         "price_per_sqm": _fmt_price(listing.price_per_sqm_eur),
-        "zscore": f"< {ANOMALY_ZSCORE_THRESHOLD:g}",
+        "zscore": "N/A" if hedonic else f"< {ANOMALY_ZSCORE_THRESHOLD:g}",
         "savings_eur": _fmt_price(max(savings_eur, 0)),
         "savings_pct": f"{max(savings_pct, 0):.1f}",
         "url": listing.url or "#",
@@ -133,6 +136,24 @@ def _deal_payload(listing: Listing, group_price: float) -> Dict[str, Any]:
 def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
     """Recent underpriced listings using deduplicated median baselines."""
     cutoff = utc_now() - timedelta(hours=hours)
+    engine = effective_deal_engine(DEAL_ENGINE)
+    if engine.startswith("hedonic"):
+        rows = db.query(Listing).filter(
+            Listing.is_active.is_(True),
+            _sale_listing_clause(),
+            _unique_listing_clause(),
+            _sane_price_clause(),
+            _sane_apartment_area_clause(),
+            Listing.property_type == "apartment",
+            Listing.first_seen >= cutoff,
+            Listing.predicted_price_per_sqm.isnot(None),
+            Listing.residual_pct <= HEDONIC_DEAL_RESIDUAL_PCT,
+        ).order_by(Listing.residual_pct.asc()).limit(10).all()
+        return [
+            _deal_payload(listing, float(listing.predicted_price_per_sqm), hedonic=True)
+            for listing in rows
+        ]
+
     group_prices = _group_medians(db)
     rows = db.query(Listing).join(Alert).filter(
         Listing.is_active.is_(True),
@@ -252,48 +273,70 @@ def _query_district_velocity(db: Session, days: int = 7) -> List[Dict[str, Any]]
 def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
     """Best active unique apartment opportunity against its median baseline."""
     group_prices = _group_medians(db)
-    alert_row = db.query(Listing, Alert).join(Alert).filter(
-        Listing.is_active.is_(True),
-        _sale_listing_clause(),
-        _unique_listing_clause(),
-        _sane_price_clause(),
-        _sane_apartment_area_clause(),
-        Listing.property_type == "apartment",
-        Alert.zscore < ANOMALY_ZSCORE_THRESHOLD,
-        Alert.savings_pct > 0,
-    ).order_by(Alert.savings_pct.desc()).first()
-
-    if alert_row:
-        listing, alert = alert_row
-        stored_savings_pct = alert.savings_pct
-        stored_savings_eur = alert.savings_eur
-    else:
-        candidates = db.query(Listing).filter(
+    engine = effective_deal_engine(DEAL_ENGINE)
+    if engine.startswith("hedonic"):
+        listing = db.query(Listing).filter(
             Listing.is_active.is_(True),
             _sale_listing_clause(),
             _unique_listing_clause(),
             _sane_price_clause(),
             _sane_apartment_area_clause(),
             Listing.property_type == "apartment",
-            Listing.price_per_sqm_eur > 0,
-        ).all()
-        candidates = [
-            listing for listing in candidates
-            if group_prices.get((listing.neighborhood, "apartment"), 0) > 0
-        ]
-        if not candidates:
+            Listing.predicted_price_per_sqm.isnot(None),
+            Listing.residual_pct <= HEDONIC_DEAL_RESIDUAL_PCT,
+        ).order_by(Listing.residual_pct.asc()).first()
+        if listing is None:
             return None
-        listing = min(
-            candidates,
-            key=lambda candidate: (
-                float(candidate.price_per_sqm_eur)
-                / group_prices[(candidate.neighborhood, "apartment")]
-            ),
+        stored_savings_pct = max(0.0, -float(listing.residual_pct or 0))
+        stored_savings_eur = max(
+            0.0,
+            (float(listing.predicted_price_per_sqm) - float(listing.price_per_sqm_eur))
+            * float(listing.area_sqm),
         )
-        stored_savings_pct = None
-        stored_savings_eur = None
+        group_price = float(listing.predicted_price_per_sqm)
+    else:
+        alert_row = db.query(Listing, Alert).join(Alert).filter(
+            Listing.is_active.is_(True),
+            _sale_listing_clause(),
+            _unique_listing_clause(),
+            _sane_price_clause(),
+            _sane_apartment_area_clause(),
+            Listing.property_type == "apartment",
+            Alert.zscore < ANOMALY_ZSCORE_THRESHOLD,
+            Alert.savings_pct > 0,
+        ).order_by(Alert.savings_pct.desc()).first()
 
-    group_price = group_prices.get((listing.neighborhood, listing.property_type), 0)
+        if alert_row:
+            listing, alert = alert_row
+            stored_savings_pct = alert.savings_pct
+            stored_savings_eur = alert.savings_eur
+        else:
+            candidates = db.query(Listing).filter(
+                Listing.is_active.is_(True),
+                _sale_listing_clause(),
+                _unique_listing_clause(),
+                _sane_price_clause(),
+                _sane_apartment_area_clause(),
+                Listing.property_type == "apartment",
+                Listing.price_per_sqm_eur > 0,
+            ).all()
+            candidates = [
+                listing for listing in candidates
+                if group_prices.get((listing.neighborhood, "apartment"), 0) > 0
+            ]
+            if not candidates:
+                return None
+            listing = min(
+                candidates,
+                key=lambda candidate: (
+                    float(candidate.price_per_sqm_eur)
+                    / group_prices[(candidate.neighborhood, "apartment")]
+                ),
+            )
+            stored_savings_pct = None
+            stored_savings_eur = None
+
+        group_price = group_prices.get((listing.neighborhood, listing.property_type), 0)
     price_sqm = float(listing.price_per_sqm_eur or 0)
     savings_pct = stored_savings_pct or (
         (group_price - price_sqm) / group_price * 100 if group_price else 0
@@ -306,9 +349,15 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
 
     reasons = []
     if savings_pct > 20:
-        reasons.append(f"Priced {savings_pct:.0f}% below neighborhood average")
+        reasons.append(
+            f"Priced {savings_pct:.0f}% below "
+            f"{'model expectation' if engine.startswith('hedonic') else 'neighborhood average'}"
+        )
     elif savings_pct > 10:
-        reasons.append(f"Solid {savings_pct:.0f}% discount vs. market")
+        reasons.append(
+            f"Solid {savings_pct:.0f}% discount vs. "
+            f"{'model expectation' if engine.startswith('hedonic') else 'market'}"
+        )
     else:
         reasons.append(f"Below average pricing at €{_fmt_price(price_sqm)}/m²")
     if listing.construction_type == "brick":
