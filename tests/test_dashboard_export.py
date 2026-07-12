@@ -13,11 +13,13 @@ from src.database.models import (
     PriceHistory,
 )
 from src.exporters.dashboard import (
+    _build_contacts_payload,
     _build_digest_payload,
     _build_listings_payload,
     _build_market_payload,
     _write_json,
 )
+from src.exporters import dashboard as dashboard_exporter
 from src.utils.time import utc_now
 
 
@@ -245,6 +247,34 @@ def test_dashboard_export_never_leaks_contact_fields_or_values():
     assert "contact_email" not in serialized
     assert "+359888123456" not in serialized
     assert "private@example.test" not in serialized
+
+
+def test_contacts_export_is_deal_only_capped_and_never_public():
+    _engine, db = session()
+    rows = []
+    for index in range(502):
+        row = listing(f"contact-{index}")
+        row.contact_email = f"deal-{index}@example.test"
+        row.contact_phone = f"+35988{index:07d}"
+        rows.append(row)
+    nondeal = listing("contact-nondeal")
+    nondeal.contact_email = "not-a-deal@example.test"
+    rows.append(nondeal)
+    db.add_all(rows)
+    db.flush()
+    payload = {
+        "listings": [
+            {"id": row.id, "is_deal": row is not nondeal, "savings_pct": 100 - index / 10}
+            for index, row in enumerate(rows)
+        ]
+    }
+
+    contacts = _build_contacts_payload(db, payload)
+
+    assert len(contacts) == 500
+    assert str(nondeal.id) not in contacts
+    assert all(set(channels) == {"email", "phone"} for channels in contacts.values())
+    assert not (dashboard_exporter.DASHBOARD_REPO_PATH / "public" / "contacts.json").exists()
 
 
 def test_build_listings_payload_counts_canonical_sibling_sources_and_exports_median():

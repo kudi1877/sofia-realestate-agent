@@ -4,6 +4,7 @@ Regenerates the three JSON files the Next.js dashboard reads from disk:
   - data/dashboard/data.json          (all listings + neighborhood stats + aggregate)
   - data/dashboard/daily-digest.json  (today's new deals, price drops, hot districts)
   - data/dashboard/market.json        (pre-aggregated city/neighborhood analytics)
+  - data/dashboard/contacts.json      (capped deal-only contact channels)
 
 Optionally git-commits and pushes the dashboard repo so Vercel auto-deploys.
 
@@ -286,6 +287,46 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         },
         "updatedAt": utc_now().isoformat(),
     }
+
+
+def _build_contacts_payload(
+    db: Session,
+    listings_payload: Dict[str, Any],
+    *,
+    limit: int = 500,
+) -> Dict[str, Dict[str, str]]:
+    """Export contact channels only for ranked deal listings, capped at 500.
+
+    Favorites are browser-local and unknowable to this server-side export, so
+    deal membership is the deliberate privacy boundary for contact inclusion.
+    """
+    ranked_deal_ids = [
+        int(row["id"])
+        for row in sorted(
+            (row for row in listings_payload.get("listings", []) if row.get("is_deal")),
+            key=lambda row: (-(float(row.get("savings_pct") or 0)), int(row["id"])),
+        )
+    ]
+    if not ranked_deal_ids:
+        return {}
+    rows = db.query(Listing.id, Listing.contact_email, Listing.contact_phone).filter(
+        Listing.id.in_(ranked_deal_ids),
+    ).all()
+    by_id = {row.id: row for row in rows}
+    contacts: Dict[str, Dict[str, str]] = {}
+    for listing_id in ranked_deal_ids:
+        row = by_id.get(listing_id)
+        if row is None or (not row.contact_email and not row.contact_phone):
+            continue
+        channels = {}
+        if row.contact_email:
+            channels["email"] = str(row.contact_email)
+        if row.contact_phone:
+            channels["phone"] = str(row.contact_phone)
+        contacts[str(listing_id)] = channels
+        if len(contacts) >= limit:
+            break
+    return contacts
 
 
 def _omit_none_values(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -793,6 +834,7 @@ def _commit_dashboard_data(repo: Path, message: str) -> bool:
             "data/dashboard/data.json",
             "data/dashboard/daily-digest.json",
             "data/dashboard/market.json",
+            "data/dashboard/contacts.json",
         )
         or f.startswith("data/dashboard/digests/")
     ]
@@ -848,11 +890,13 @@ def export_dashboard(
     seller_signals = calculate_market_signals(db)
     digest_payload = _build_digest_payload(db, dict(deals_by_hood), seller_signals)
     market_payload = _build_market_payload(db, seller_signals)
+    contacts_payload = _build_contacts_payload(db, listings_payload)
     _attach_imotbg_benchmark(market_payload)
 
     _write_json(data_dir / "data.json", listings_payload)
     _write_json(data_dir / "daily-digest.json", digest_payload)
     _write_json(data_dir / "market.json", market_payload)
+    _write_json(data_dir / "contacts.json", contacts_payload)
     try:
         _archive_digest(data_dir, digest_payload)
     except Exception as exc:
@@ -897,6 +941,7 @@ def export_dashboard(
             "data/dashboard/data.json",
             "data/dashboard/daily-digest.json",
             "data/dashboard/market.json",
+            "data/dashboard/contacts.json",
         ],
         "pushed": False,
         "data_health": data_health,
