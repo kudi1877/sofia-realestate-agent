@@ -15,11 +15,12 @@ from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
 from jinja2 import Environment, FileSystemLoader
-from sqlalchemy import and_, create_engine
+from sqlalchemy import and_, create_engine, or_
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import (
     ANOMALY_ZSCORE_THRESHOLD,
+    AUTHENTICITY_DEAL_MIN_SCORE,
     DASHBOARD_DATA_DIR,
     DEAL_ENGINE,
     HEDONIC_DEAL_RESIDUAL_PCT,
@@ -85,6 +86,13 @@ def _sane_apartment_area_clause():
     )
 
 
+def _authenticity_clause():
+    return or_(
+        Listing.authenticity_score.is_(None),
+        Listing.authenticity_score >= AUTHENTICITY_DEAL_MIN_SCORE,
+    )
+
+
 def _group_medians(db: Session) -> Dict[tuple[str, str], float]:
     grouped = defaultdict(list)
     rows = db.query(
@@ -144,6 +152,7 @@ def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
             _unique_listing_clause(),
             _sane_price_clause(),
             _sane_apartment_area_clause(),
+            _authenticity_clause(),
             Listing.property_type == "apartment",
             Listing.first_seen >= cutoff,
             Listing.predicted_price_per_sqm.isnot(None),
@@ -160,6 +169,7 @@ def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
         _sale_listing_clause(),
         _unique_listing_clause(),
         _sane_price_clause(),
+        _authenticity_clause(),
         Listing.first_seen >= cutoff,
         Alert.alert_type == "underpriced",
         Alert.zscore.isnot(None),
@@ -172,6 +182,7 @@ def _query_new_deals(db: Session, hours: int = 24) -> List[Dict[str, Any]]:
             _sale_listing_clause(),
             _unique_listing_clause(),
             _sane_price_clause(),
+            _authenticity_clause(),
             Listing.first_seen >= cutoff,
             Listing.price_per_sqm_eur > 0,
         ).all()
@@ -197,7 +208,12 @@ def _query_price_drops(
     min_drop_pct: float = PRICE_DROP_PCT_THRESHOLD,
 ) -> List[Dict[str, Any]]:
     """Active unique listings below their first recorded price."""
-    rows = ListingRepository(db).get_price_drops(min_drop_pct=min_drop_pct)[:8]
+    rows = [
+        listing
+        for listing in ListingRepository(db).get_price_drops(min_drop_pct=min_drop_pct)
+        if listing.authenticity_score is None
+        or listing.authenticity_score >= AUTHENTICITY_DEAL_MIN_SCORE
+    ][:8]
     return [
         {
             "id": listing.id,
@@ -281,6 +297,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
             _unique_listing_clause(),
             _sane_price_clause(),
             _sane_apartment_area_clause(),
+            _authenticity_clause(),
             Listing.property_type == "apartment",
             Listing.predicted_price_per_sqm.isnot(None),
             Listing.residual_pct <= HEDONIC_DEAL_RESIDUAL_PCT,
@@ -301,6 +318,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
             _unique_listing_clause(),
             _sane_price_clause(),
             _sane_apartment_area_clause(),
+            _authenticity_clause(),
             Listing.property_type == "apartment",
             Alert.zscore < ANOMALY_ZSCORE_THRESHOLD,
             Alert.savings_pct > 0,
@@ -317,6 +335,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
                 _unique_listing_clause(),
                 _sane_price_clause(),
                 _sane_apartment_area_clause(),
+                _authenticity_clause(),
                 Listing.property_type == "apartment",
                 Listing.price_per_sqm_eur > 0,
             ).all()

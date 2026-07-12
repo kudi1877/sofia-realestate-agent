@@ -145,6 +145,30 @@ def test_build_listings_payload_can_publish_hedonic_deals(monkeypatch):
     assert exported["deal_engine"] == "hedonic"
 
 
+def test_low_authenticity_listing_exports_evidence_but_is_not_a_deal():
+    _engine, db = session()
+    row = listing("bait")
+    row.authenticity_score = 35
+    row.authenticity_flags = '[{"signal": "photo_reuse", "penalty": 35, "detail": "reused", "conflicts": []}]'
+    db.add(row)
+    db.flush()
+    db.add(
+        Alert(
+            listing_id=row.id,
+            alert_type="underpriced",
+            zscore=-4,
+            savings_pct=60,
+        )
+    )
+    db.commit()
+
+    exported = _build_listings_payload(db)["listings"][0]
+
+    assert exported["authenticity_score"] == 35
+    assert exported["authenticity_flags"][0]["signal"] == "photo_reuse"
+    assert exported["is_deal"] is False
+
+
 def test_build_listings_payload_omits_none_listing_values():
     engine, db = session()
     row = listing("export-no-alert")

@@ -53,6 +53,14 @@ HEDONIC_DEAL_RESIDUAL_PCT = float(os.getenv("HEDONIC_DEAL_RESIDUAL_PCT", "-15"))
 HEDONIC_MAX_TRAIN_PRICE_PER_SQM = float(os.getenv("HEDONIC_MAX_TRAIN_PRICE_PER_SQM", "15000"))
 DEAL_ENGINE = os.getenv("DEAL_ENGINE", "zscore").strip().lower()
 
+# Authenticity and bait detection.
+HASH_MAX_PER_RUN = int(os.getenv("HASH_MAX_PER_RUN", "100"))
+HASH_DELAY_SECONDS = float(os.getenv("HASH_DELAY_SECONDS", "1.5"))
+IMAGE_HASH_CACHE_PATH = Path(
+    os.getenv("IMAGE_HASH_CACHE_PATH", str(DATA_DIR / "cache" / "image_phash.json"))
+).expanduser()
+AUTHENTICITY_DEAL_MIN_SCORE = int(os.getenv("AUTHENTICITY_DEAL_MIN_SCORE", "50"))
+
 # Sanity floor: nothing in Sofia genuinely sells below this — prices under it
 # are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).
 MIN_PRICE_EUR = float(os.getenv("MIN_PRICE_EUR", "5000"))

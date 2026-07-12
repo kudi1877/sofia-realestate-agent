@@ -97,6 +97,9 @@ class Listing(Base):
     predicted_price_per_sqm = Column(Float)
     residual_pct = Column(Float)
     hedonic_contributions = Column(Text)
+    image_phash = Column(String(16))
+    authenticity_score = Column(Integer)
+    authenticity_flags = Column(Text)
     
     # Metadata
     first_seen = Column(DateTime, default=func.now())
@@ -116,6 +119,7 @@ class Listing(Base):
         Index("idx_listing_source_source_id", "source", "source_id", unique=True),
         Index("idx_listing_neighborhood_type", "neighborhood", "property_type"),
         Index("idx_listing_canonical", "canonical_id"),
+        Index("idx_listing_image_phash", "image_phash"),
     )
     
     def __repr__(self):
@@ -299,6 +303,9 @@ def init_db():
             ("predicted_price_per_sqm", "FLOAT"),
             ("residual_pct", "FLOAT"),
             ("hedonic_contributions", "TEXT"),
+            ("image_phash", "VARCHAR(16)"),
+            ("authenticity_score", "INTEGER"),
+            ("authenticity_flags", "TEXT"),
             ("description_full", "TEXT"),
             ("address", "TEXT"),
             ("latitude", "FLOAT"),
@@ -330,6 +337,10 @@ def init_db():
             for col_name, col_def in cols:
                 if col_name not in existing:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"))
+        if inspector.has_table("listings"):
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_listing_image_phash ON listings (image_phash)")
+            )
 
 
 def get_db():

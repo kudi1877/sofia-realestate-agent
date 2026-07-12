@@ -24,6 +24,7 @@ from src.analysis.trends import calculate_neighborhood_trends, generate_market_s
 from src.analysis.rental_market import update_neighborhood_rent_stats
 from src.alerts.telegram import should_send_alert
 from src.config import (
+    AUTHENTICITY_DEAL_MIN_SCORE,
     MARK_INACTIVE_MIN_RATIO,
     MIN_PRICE_EUR,
     MIN_RENT_EUR,
@@ -399,6 +400,11 @@ def cmd_alerts():
         # Apartments only — parcels/commercial pollute €/m² stats.
         if (listing.property_type or '').lower() != 'apartment':
             continue
+        if (
+            getattr(listing, 'authenticity_score', None) is not None
+            and listing.authenticity_score < AUTHENTICITY_DEAL_MIN_SCORE
+        ):
+            continue
         # Sane area. Excludes 4000m² "apartments" that are actually plots.
         area = listing.area_sqm or 0
         if area < 30 or area > 500:
@@ -533,6 +539,26 @@ def cmd_stats():
     return stats
 
 
+def cmd_authenticity_review():
+    """Print the lowest-scoring active listings for manual review."""
+    from src.analysis.authenticity import lowest_scorers
+
+    db = get_db()
+    try:
+        rows = lowest_scorers(db, limit=20)
+    finally:
+        db.close()
+    print("\nLOWEST AUTHENTICITY SCORES")
+    print("=" * 80)
+    for row in rows:
+        reasons = "; ".join(reason for reason in row["reasons"] if reason) or "No flags"
+        print(
+            f"{row['score']:>3}  {row['source']:<12} {row['neighborhood'] or 'Unknown'} "
+            f"€{float(row['price_eur'] or 0):,.0f}  {reasons}\n     {row['url']}"
+        )
+    return rows
+
+
 def cmd_dedup_stats():
     """Show deduplication statistics without running full scrape."""
     db = get_db()
@@ -659,6 +685,19 @@ def cmd_full():
             finally:
                 detail_db.close()
 
+        with rec.step("image_hash"):
+            from src.enrichment.image_hash import hash_listing_images
+
+            hash_db = get_db()
+            try:
+                hash_summary = hash_listing_images(hash_db)
+                logger.info(
+                    f"Image hashes: {hash_summary['hashed']} hashed, "
+                    f"{hash_summary['failed']} failed"
+                )
+            finally:
+                hash_db.close()
+
         with rec.step("llm_extraction"):
             from src.enrichment.llm_extract import extract_listing_attributes
 
@@ -703,6 +742,19 @@ def cmd_full():
         with rec.step("analyze"):
             anomalies = cmd_analyze()
         rec.set_analysis(anomalies=anomalies, neighborhoods=0, groups_used=0)
+
+        with rec.step("authenticity"):
+            from src.analysis.authenticity import score_authenticity
+
+            authenticity_db = get_db()
+            try:
+                authenticity_summary = score_authenticity(authenticity_db)
+                logger.info(
+                    f"Authenticity: {authenticity_summary['scored']} scored, "
+                    f"{authenticity_summary['red']} red, {authenticity_summary['amber']} amber"
+                )
+            finally:
+                authenticity_db.close()
 
         # Step 3: Alerts (Telegram digest — single message per run).
         # Non-fatal by design (TIN-447): a broken/unconfigured Telegram must
@@ -796,6 +848,7 @@ Examples:
   python -m src.main alerts            # Generate and send alerts
   python -m src.main stats             # Show statistics
   python -m src.main dedup-stats       # Show deduplication stats
+  python -m src.main authenticity-review # Show 20 lowest authenticity scores
   python -m src.main export-dashboard  # Refresh dashboard JSON + push to GitHub
   python -m src.main full              # Run full pipeline (scrape→analyze→alerts→export)
         """
@@ -803,7 +856,7 @@ Examples:
 
     parser.add_argument(
         'command',
-        choices=['scrape', 'analyze', 'alerts', 'stats', 'full', 'init', 'dedup-stats', 'export-dashboard'],
+        choices=['scrape', 'analyze', 'alerts', 'stats', 'full', 'init', 'dedup-stats', 'authenticity-review', 'export-dashboard'],
         help='Command to run'
     )
     
@@ -827,6 +880,7 @@ Examples:
         'stats': cmd_stats,
         'full': cmd_full,
         'dedup-stats': cmd_dedup_stats,
+        'authenticity-review': cmd_authenticity_review,
         'export-dashboard': cmd_export_dashboard,
     }
     
@@ -837,6 +891,9 @@ Examples:
             # Already printed
             pass
         elif args.command == 'dedup-stats':
+            # Already printed
+            pass
+        elif args.command == 'authenticity-review':
             # Already printed
             pass
         elif args.command == 'alerts':

@@ -159,3 +159,31 @@ def test_daily_email_uses_hedonic_expectation_when_enabled(monkeypatch):
     assert deals[0]["savings_pct"] == "20.0"
     assert top_pick["savings_pct"] == "20"
     assert "model expectation" in top_pick["reasoning"]
+
+
+def test_daily_digest_excludes_low_authenticity_deals_and_price_drops():
+    db = session()
+    bait = listing("bait", 800)
+    bait.authenticity_score = 35
+    bait.first_price_eur = 50000
+    bait.price_eur = 40000
+    bait.price_changes = 1
+    safe = listing("safe", 1000)
+    safe.authenticity_score = 85
+    db.add_all([bait, safe])
+    db.flush()
+    db.add_all(
+        [
+            Alert(listing_id=bait.id, alert_type="underpriced", zscore=-4, savings_pct=60),
+            Alert(listing_id=safe.id, alert_type="underpriced", zscore=-2, savings_pct=20),
+        ]
+    )
+    db.commit()
+
+    deals = daily_email._query_new_deals(db)
+    top_pick = daily_email._query_top_pick(db)
+    price_drops = daily_email._query_price_drops(db)
+
+    assert [deal["id"] for deal in deals] == [safe.id]
+    assert top_pick["url"].endswith("/safe")
+    assert price_drops == []

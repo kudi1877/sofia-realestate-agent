@@ -40,6 +40,7 @@ from src.analysis.imotbg_benchmark import fetch_benchmark
 from src.analysis.seller_signals import calculate_market_signals, market_pulse_line
 from src.analysis.rental_market import gross_yield_pct, rent_stats_lookup
 from src.analysis.hedonic import effective_deal_engine, is_hedonic_deal
+from src.analysis.authenticity import passes_authenticity_gate
 from src.analysis.data_health import evaluate_data_health, load_previous_runs
 from src.database.models import (
     Listing,
@@ -131,7 +132,7 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         )
         # is_deal is the single source of truth for deal badges/feeds: only
         # alert-qualified outliers. zscore alone no longer implies "deal".
-        is_deal = (
+        is_deal = passes_authenticity_gate(l) and (
             is_hedonic_deal(l)
             if deal_engine.startswith("hedonic")
             else (
@@ -220,6 +221,12 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                         else None
                     ),
                     "deal_engine": deal_engine,
+                    "authenticity_score": l.authenticity_score,
+                    "authenticity_flags": (
+                        json.loads(l.authenticity_flags)
+                        if l.authenticity_flags
+                        else None
+                    ),
                     "auction_start": l.auction_start.isoformat() if l.auction_start else None,
                     "auction_end": l.auction_end.isoformat() if l.auction_end else None,
                     "bailiff_name": l.bailiff_name,
@@ -549,8 +556,9 @@ def _build_digest_payload(
     seller_signals = seller_signals or calculate_market_signals(db)
     price_drops = [
         _dashboard_price_drop(drop)
-        for drop in detect_price_drops(db)[:8]
-    ]
+        for drop in detect_price_drops(db)
+        if passes_authenticity_gate(drop["listing"])
+    ][:8]
     auction_cutoff = utc_now() - timedelta(hours=24)
     auction_rows = db.query(Listing).filter(
         Listing.listing_kind == "auction",
