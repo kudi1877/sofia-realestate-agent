@@ -15,12 +15,15 @@ from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
 from jinja2 import Environment, FileSystemLoader
-from sqlalchemy import create_engine
+from sqlalchemy import and_, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import (
     ANOMALY_ZSCORE_THRESHOLD,
     DASHBOARD_DATA_DIR,
+    MAX_APARTMENT_AREA_SQM,
+    MIN_APARTMENT_AREA_SQM,
+    MIN_APARTMENT_PRICE_PER_SQM_EUR,
     MIN_PRICE_EUR,
     PRICE_DROP_PCT_THRESHOLD,
 )
@@ -69,6 +72,14 @@ def _sale_listing_clause():
 def _sane_price_clause():
     """Defense in depth vs price-parse artifacts (TIN-472: a €6 'Top Pick')."""
     return Listing.price_eur >= MIN_PRICE_EUR
+
+
+def _sane_apartment_area_clause():
+    """Reject implausible apartment size and €/m² source misclassifications."""
+    return and_(
+        Listing.area_sqm.between(MIN_APARTMENT_AREA_SQM, MAX_APARTMENT_AREA_SQM),
+        Listing.price_per_sqm_eur >= MIN_APARTMENT_PRICE_PER_SQM_EUR,
+    )
 
 
 def _group_medians(db: Session) -> Dict[tuple[str, str], float]:
@@ -246,6 +257,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
         _sale_listing_clause(),
         _unique_listing_clause(),
         _sane_price_clause(),
+        _sane_apartment_area_clause(),
         Listing.property_type == "apartment",
         Alert.zscore < ANOMALY_ZSCORE_THRESHOLD,
         Alert.savings_pct > 0,
@@ -261,9 +273,9 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
             _sale_listing_clause(),
             _unique_listing_clause(),
             _sane_price_clause(),
+            _sane_apartment_area_clause(),
             Listing.property_type == "apartment",
             Listing.price_per_sqm_eur > 0,
-            Listing.area_sqm > 30,
         ).all()
         candidates = [
             listing for listing in candidates

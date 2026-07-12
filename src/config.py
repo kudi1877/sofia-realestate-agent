@@ -55,6 +55,15 @@ BCPEA_MAX_DETAIL_FETCHES = int(os.getenv("BCPEA_MAX_DETAIL_FETCHES", "20"))
 # not residential prices — suppress rather than publish (TIN-476).
 PUBLISH_MIN_MEDIAN_EUR_SQM = float(os.getenv("PUBLISH_MIN_MEDIAN_EUR_SQM", "700"))
 
+# Plausible apartment size range. Outside it the "apartment" label is a
+# source misclassification (a 7,453 m² "apartment" in Горна баня — really a
+# plot — became Top Pick of the Day at €4/m² and polluted the hood's stats).
+MIN_APARTMENT_AREA_SQM = float(os.getenv("MIN_APARTMENT_AREA_SQM", "20"))
+MAX_APARTMENT_AREA_SQM = float(os.getenv("MAX_APARTMENT_AREA_SQM", "500"))
+MIN_APARTMENT_PRICE_PER_SQM_EUR = float(
+    os.getenv("MIN_APARTMENT_PRICE_PER_SQM_EUR", "700")
+)
+
 # Analysis settings
 ANOMALY_ZSCORE_THRESHOLD = float(os.getenv("ANOMALY_ZSCORE_THRESHOLD", "-1.5"))
 ANOMALY_PCT_THRESHOLD = float(os.getenv("ANOMALY_PCT_THRESHOLD", "0.85"))

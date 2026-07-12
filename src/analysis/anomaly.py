@@ -8,7 +8,26 @@ from loguru import logger
 from sqlalchemy.orm import Session
 
 from src.database.models import Listing
-from src.config import ANOMALY_ZSCORE_THRESHOLD, ANOMALY_PCT_THRESHOLD, MIN_LISTINGS_PER_GROUP
+from src.config import (
+    ANOMALY_ZSCORE_THRESHOLD,
+    ANOMALY_PCT_THRESHOLD,
+    MAX_APARTMENT_AREA_SQM,
+    MIN_APARTMENT_AREA_SQM,
+    MIN_LISTINGS_PER_GROUP,
+)
+
+
+def _plausible_for_type(listing: Listing) -> bool:
+    """Reject source misclassifications before they touch stats or alerts.
+
+    A 7,453 m² "apartment" (really a plot) at €4/m² once became Top Pick of
+    the Day and dragged its neighborhood's apartment-tier stats down. Only
+    apartments/studios get area bounds — houses and plots genuinely vary.
+    """
+    if listing.property_type in ("apartment", "studio", "maisonette"):
+        area = listing.area_sqm or 0
+        return MIN_APARTMENT_AREA_SQM <= area <= MAX_APARTMENT_AREA_SQM
+    return True
 
 
 @dataclass
@@ -59,11 +78,13 @@ def calculate_neighborhood_stats(
     
     # Group listings at all 3 tiers
     groups: Dict[Tuple[str, ...], List[float]] = {}
-    
+
     for listing in listings:
         if listing.price_per_sqm_eur <= 0:
             continue
-        
+        if not _plausible_for_type(listing):
+            continue
+
         construction = listing.construction_type or 'unknown'
         
         # Tier 1: neighborhood + type + construction (most precise)
@@ -108,11 +129,13 @@ def detect_anomalies(
         stats = calculate_neighborhood_stats(listings)
     
     anomalies = []
-    
+
     for listing in listings:
         if listing.price_per_sqm_eur <= 0:
             continue
-        
+        if not _plausible_for_type(listing):
+            continue
+
         construction = listing.construction_type or 'unknown'
         
         # Try most precise group first, then fall back — but never across

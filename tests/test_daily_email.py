@@ -105,3 +105,37 @@ def test_daily_email_uses_shared_session_dedup_and_preserves_shapes(tmp_path, mo
         "price_eur", "price_per_sqm", "savings_pct", "savings_eur",
         "reasoning", "url",
     }
+
+
+def test_top_pick_rejects_implausible_apartment_price_per_sqm():
+    db = session()
+    implausible = listing("implausible", 38)
+    implausible.area_sqm = 260
+    implausible.price_eur = 10000
+    sane = listing("sane", 1000)
+    db.add_all([implausible, sane])
+    db.flush()
+    db.add_all(
+        [
+            Alert(
+                listing_id=implausible.id,
+                alert_type="underpriced",
+                zscore=-3,
+                savings_eur=250000,
+                savings_pct=99,
+            ),
+            Alert(
+                listing_id=sane.id,
+                alert_type="underpriced",
+                zscore=-2,
+                savings_eur=25000,
+                savings_pct=50,
+            ),
+        ]
+    )
+    db.commit()
+
+    top_pick = daily_email._query_top_pick(db)
+
+    assert top_pick["price_per_sqm"] == "1 000"
+    assert top_pick["url"].endswith("/sane")

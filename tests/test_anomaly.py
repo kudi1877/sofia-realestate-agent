@@ -141,3 +141,17 @@ def test_analyze_database_excludes_active_duplicate_listings():
     anomalies = analyze_database(db)
 
     assert anomalies == []
+
+
+def test_implausible_apartment_area_excluded_from_stats_and_detection():
+    # A 7,453 m² "apartment" (source-misclassified plot) once became Top Pick
+    # at €4/m² and dragged its hood's apartment stats down. Bounds: 20–500 m².
+    normal = [listing(2000 + i, source_id=f"n{i}", area_sqm=70) for i in range(6)]
+    monster = listing(4, source_id="monster", area_sqm=7453)
+
+    stats = calculate_neighborhood_stats(normal + [monster], min_group_size=5)
+    apt_key = ("Люлин", "apartment", "all")
+    assert stats[apt_key]["count"] == 6  # monster not blended in
+
+    anomalies = detect_anomalies(normal + [monster], stats)
+    assert all(a.listing.source_id != "monster" for a in anomalies)
