@@ -23,6 +23,10 @@ SOLD_AFTER_DAYS = int(os.getenv("SOLD_AFTER_DAYS", "14"))
 PING_MAX_PER_RUN = int(os.getenv("PING_MAX_PER_RUN", "400"))
 PING_RECENT_DAYS = int(os.getenv("PING_RECENT_DAYS", "14"))
 PING_DELAY_SECONDS = float(os.getenv("PING_DELAY_SECONDS", "2.0"))
+DATA_HEALTH_DRIFT_PCT = float(os.getenv("DATA_HEALTH_DRIFT_PCT", "30"))
+DATA_HEALTH_BENCHMARK_DELTA_PCT = float(os.getenv("DATA_HEALTH_BENCHMARK_DELTA_PCT", "40"))
+DATA_HEALTH_IMAGE_WARN_PCT = float(os.getenv("DATA_HEALTH_IMAGE_WARN_PCT", "60"))
+DATA_HEALTH_IMAGE_ERROR_PCT = float(os.getenv("DATA_HEALTH_IMAGE_ERROR_PCT", "30"))
 
 # Sanity floor: nothing in Sofia genuinely sells below this — prices under it
 # are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).

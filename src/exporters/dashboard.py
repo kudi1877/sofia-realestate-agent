@@ -37,6 +37,7 @@ from src.config import (
 from src.analysis.anomaly import calculate_neighborhood_stats
 from src.analysis.imotbg_benchmark import fetch_benchmark
 from src.analysis.seller_signals import calculate_market_signals, market_pulse_line
+from src.analysis.data_health import evaluate_data_health, load_previous_runs
 from src.database.models import Listing, Neighborhood, NeighborhoodStatsHistory
 from src.utils.git import changed_files, commit_and_push
 from src.utils.time import utc_now
@@ -698,7 +699,11 @@ def _commit_dashboard_data(repo: Path, message: str) -> bool:
 # ── Public entry point ────────────────────────────────────────────────────────
 
 
-def export_dashboard(db: Session, push: bool | None = None) -> Dict[str, Any]:
+def export_dashboard(
+    db: Session,
+    push: bool | None = None,
+    current_sources: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
     """Regenerate dashboard JSON files from DB; optionally commit + push.
 
     Args:
@@ -738,7 +743,40 @@ def export_dashboard(db: Session, push: bool | None = None) -> Dict[str, Any]:
     _write_json(data_dir / "data.json", listings_payload)
     _write_json(data_dir / "daily-digest.json", digest_payload)
     _write_json(data_dir / "market.json", market_payload)
-    _archive_digest(data_dir, digest_payload)
+    try:
+        _archive_digest(data_dir, digest_payload)
+    except Exception as exc:
+        logger.warning(f"Digest archive write failed without blocking export: {exc}")
+
+    # Warning-only by contract: health telemetry must never block publishing.
+    try:
+        data_health = evaluate_data_health(
+            db,
+            market_payload,
+            current_sources=current_sources,
+            previous_runs=load_previous_runs(data_dir / "runs.json"),
+            data_dir=data_dir,
+        )
+        for check in data_health["checks"]:
+            if check["status"] in ("amber", "red"):
+                logger.warning(f"Data health {check['status']}: {check['label']} - {check['detail']}")
+    except Exception as exc:
+        logger.warning(f"Data health evaluation failed without blocking export: {exc}")
+        data_health = {
+            "status": "amber",
+            "checks": [
+                {
+                    "key": "evaluation_error",
+                    "label": "Data health evaluation",
+                    "status": "amber",
+                    "value": 0,
+                    "unit": "checks",
+                    "detail": str(exc)[:200],
+                }
+            ],
+            "source_metrics": {},
+            "generated_at": utc_now().isoformat(),
+        }
 
     summary = {
         "ok": True,
@@ -751,6 +789,7 @@ def export_dashboard(db: Session, push: bool | None = None) -> Dict[str, Any]:
             "data/dashboard/market.json",
         ],
         "pushed": False,
+        "data_health": data_health,
     }
     logger.info(
         f"Wrote {summary['listings']} listings, {summary['deals']} deals, "

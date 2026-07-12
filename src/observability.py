@@ -76,6 +76,7 @@ class RunRecorder:
     totals: Dict[str, int] = field(default_factory=dict)
     analysis: Dict[str, Any] = field(default_factory=dict)
     availability: Dict[str, int] = field(default_factory=dict)
+    data_health: Dict[str, Any] = field(default_factory=dict)
     digest: Dict[str, Any] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
 
@@ -112,6 +113,9 @@ class RunRecorder:
             "gone": gone,
             "unknown": unknown,
         }
+
+    def set_data_health(self, data_health: Dict[str, Any]) -> None:
+        self.data_health = data_health
 
     def set_digest(
         self,
@@ -169,6 +173,7 @@ class RunRecorder:
             "totals": self.totals,
             "analysis": self.analysis,
             "availability": self.availability,
+            "data_health": self.data_health,
             "digest": self.digest,
             "errors": self.errors,
         }

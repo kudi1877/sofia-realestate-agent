@@ -549,7 +549,7 @@ def cmd_dedup_stats():
     return stats
 
 
-def cmd_export_dashboard():
+def cmd_export_dashboard(recorder=None):
     """Regenerate dashboard JSON files from DB; auto-commit + push if enabled.
 
     Writes <DASHBOARD_REPO_PATH>/data/dashboard/data.json and daily-digest.json. When
@@ -560,7 +560,13 @@ def cmd_export_dashboard():
     db = get_db()
 
     from src.exporters.dashboard import export_dashboard
-    summary = export_dashboard(db)
+    current_sources = None
+    if recorder is not None:
+        current_sources = [
+            {"name": source.name, "scraped": source.scraped}
+            for source in recorder.sources
+        ]
+    summary = export_dashboard(db, current_sources=current_sources)
 
     if not summary.get("ok"):
         logger.error(f"Dashboard export failed: {summary.get('reason')}")
@@ -653,7 +659,8 @@ def cmd_full():
 
         # Step 4: Refresh dashboard data + auto-deploy via Vercel
         with rec.step("export"):
-            export_summary = cmd_export_dashboard()
+            export_summary = cmd_export_dashboard(recorder=rec)
+        rec.set_data_health(export_summary.get("data_health", {}))
 
         # Compute final active count for the run record.
         from src.database.models import get_db as _get_db
