@@ -25,6 +25,10 @@ SOLD_AFTER_DAYS = int(os.getenv("SOLD_AFTER_DAYS", "14"))
 # are parse artifacts (a €6 "listing" made Top Pick of the Day, TIN-472).
 MIN_PRICE_EUR = float(os.getenv("MIN_PRICE_EUR", "5000"))
 
+# Published neighborhood medians below this €/m² are land-dominated blends,
+# not residential prices — suppress rather than publish (TIN-476).
+PUBLISH_MIN_MEDIAN_EUR_SQM = float(os.getenv("PUBLISH_MIN_MEDIAN_EUR_SQM", "700"))
+
 # Analysis settings
 ANOMALY_ZSCORE_THRESHOLD = float(os.getenv("ANOMALY_ZSCORE_THRESHOLD", "-1.5"))
 ANOMALY_PCT_THRESHOLD = float(os.getenv("ANOMALY_PCT_THRESHOLD", "0.85"))

@@ -21,7 +21,7 @@ from src.scrapers.propertybg import PropertyBGScraper
 from src.analysis.anomaly import analyze_database, calculate_neighborhood_stats
 from src.analysis.trends import calculate_neighborhood_trends, generate_market_summary
 from src.alerts.telegram import should_send_alert
-from src.config import MARK_INACTIVE_MIN_RATIO, SOLD_AFTER_DAYS
+from src.config import MARK_INACTIVE_MIN_RATIO, PUBLISH_MIN_MEDIAN_EUR_SQM, SOLD_AFTER_DAYS
 from src.utils.deduplication import deduplicate_listings, get_duplicate_stats
 
 
@@ -222,23 +222,62 @@ def update_neighborhood_stats(db):
 
     history_repo.record_snapshot(published_stats)
 
-    logger.info(f"Updated published stats for {len(published_stats)} neighborhoods")
+    # Clear stats for hoods NOT in the published set — otherwise a hood that
+    # gets suppressed (e.g. land-dominated, TIN-476) keeps serving its stale
+    # numbers from the Neighborhood table forever.
+    from src.database.models import Neighborhood as _Neighborhood
+    cleared = db.query(_Neighborhood).filter(
+        ~_Neighborhood.name.in_(list(published_stats.keys())),
+        _Neighborhood.median_price_per_sqm.isnot(None),
+    ).update(
+        {"avg_price_per_sqm": None, "median_price_per_sqm": None, "listing_count": 0},
+        synchronize_session=False,
+    )
+    db.commit()
+
+    logger.info(
+        f"Updated published stats for {len(published_stats)} neighborhoods"
+        + (f"; cleared {cleared} suppressed" if cleared else "")
+    )
 
 
 def select_published_neighborhood_stats(stats):
-    """Select one stable tier per neighborhood for persisted user-facing stats."""
+    """Select one stable tier per neighborhood for persisted user-facing stats.
+
+    Fallback order: apartments → houses → all-types. The all-types tier is
+    NEVER published for plot-dominated hoods — the imot.bg benchmark exposed
+    Нови Искър publishing €173/m² (land prices) vs their €1,624 (TIN-476).
+    A plot-heavy blend is detected by comparing against the plot tier.
+    """
     neighborhoods = {key[0] for key in stats}
     selected = {}
 
     for neighborhood in neighborhoods:
-        apartment_key = (neighborhood, 'apartment', 'all')
-        fallback_key = (neighborhood, 'all', 'all')
-        if apartment_key in stats:
-            selected[neighborhood] = stats[apartment_key]
-        elif fallback_key in stats:
-            selected[neighborhood] = stats[fallback_key]
+        for prop_type in ('apartment', 'house'):
+            key = (neighborhood, prop_type, 'all')
+            if key in stats:
+                selected[neighborhood] = stats[key]
+                break
+        else:
+            fallback = stats.get((neighborhood, 'all', 'all'))
+            plots = stats.get((neighborhood, 'plot', 'all'))
+            # Publish the mixed tier only when it isn't just land prices:
+            # if a plot tier exists and the blend sits below 2× the plot
+            # median, land dominates — better to publish nothing.
+            if fallback and (
+                plots is None or fallback['median'] > 2 * plots['median']
+            ):
+                selected[neighborhood] = fallback
 
-    return selected
+    # Absolute sanity floor: no residential €/m² in Sofia is genuinely below
+    # this — anything under it is a land-dominated blend that slipped past
+    # the plot-tier check (Суходол published €177/m² vs imot.bg's €1,787).
+    # Publishing nothing beats publishing land prices as home prices.
+    return {
+        hood: group
+        for hood, group in selected.items()
+        if group['median'] >= PUBLISH_MIN_MEDIAN_EUR_SQM
+    }
 
 
 def cmd_analyze():

@@ -293,6 +293,7 @@ def test_digest_exports_recent_price_drop_with_old_and_new_prices(monkeypatch):
             "source": "test",
             "url": "https://example.test/price-drop",
             "title": "Export listing",
+            "image_url": None,
             "price_eur": 90000.0,
             "area_sqm": 50.0,
             "price_per_sqm_eur": 1800.0,
@@ -301,6 +302,8 @@ def test_digest_exports_recent_price_drop_with_old_and_new_prices(monkeypatch):
             "rooms": 2.0,
             "zscore": None,
             "savings_pct": None,
+            # A price drop is not automatically an underpriced deal.
+            "is_deal": False,
             "old_price": 100000.0,
             "new_price": 90000.0,
             "price_drop_pct": 10.0,

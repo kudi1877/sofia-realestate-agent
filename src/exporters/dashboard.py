@@ -121,6 +121,10 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                 {
                     "id": l.id,
                     "source": l.source,
+                    # Stable keys for the dashboard's favorites/watchlist —
+                    # canonical_id survives cross-source dedup switches.
+                    "source_id": l.source_id,
+                    "canonical_id": l.canonical_id,
                     "url": l.url,
                     "image_url": l.image_url,
                     "neighborhood": l.neighborhood,
@@ -506,12 +510,13 @@ def _to_num(v: Any) -> float | None:
     return None
 
 
-def _dashboard_deal(d: Dict[str, Any]) -> Dict[str, Any]:
+def _dashboard_deal(d: Dict[str, Any], is_deal: bool = True) -> Dict[str, Any]:
     return {
         "id":                d.get("id"),
         "source":            d.get("source"),
         "url":               d.get("url"),
         "title":             d.get("title") or d.get("neighborhood"),
+        "image_url":         d.get("image_url"),
         "price_eur":         _to_num(d.get("price_eur")),
         "area_sqm":          _to_num(d.get("area_sqm")),
         "price_per_sqm_eur": _to_num(d.get("price_per_sqm") or d.get("price_per_sqm_eur")),
@@ -520,11 +525,13 @@ def _dashboard_deal(d: Dict[str, Any]) -> Dict[str, Any]:
         "rooms":             _to_num(d.get("rooms")),
         "zscore":            _to_num(d.get("zscore")),
         "savings_pct":       _to_num(d.get("savings_pct")),
+        "is_deal":           is_deal,
     }
 
 
 def _dashboard_drop(d: Dict[str, Any]) -> Dict[str, Any]:
-    base = _dashboard_deal(d)
+    # A price drop is not necessarily an underpriced deal.
+    base = _dashboard_deal(d, is_deal=False)
     base.update({
         "old_price":      _to_num(d.get("old_price") or d.get("first_price_eur")),
         "new_price":      _to_num(d.get("new_price") or d.get("price_eur")),
