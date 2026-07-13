@@ -59,6 +59,36 @@ def test_hard_traps_helper_reads_persisted_json():
     assert hard_traps("not json") == []
 
 
+def test_billing_error_aborts_batch_fast():
+    # An empty credit balance fails every call identically — the batch must
+    # abort on the first one, not retry per listing (2026-07-13 lesson).
+    from src.enrichment.llm_extract import extract_listing_attributes
+
+    class DeadProvider:
+        name = "anthropic"
+        calls = 0
+
+        def extract(self, description):
+            DeadProvider.calls += 1
+            raise RuntimeError(
+                "Error code: 400 - Your credit balance is too low to access the Anthropic API."
+            )
+
+    class FakeRow:
+        id = 1
+        description_full = "тухла, юг"
+
+    class StubDb:
+        def commit(self):
+            pass
+
+    summary = extract_listing_attributes(
+        StubDb(), provider=DeadProvider(), rows=[FakeRow(), FakeRow(), FakeRow()]
+    )
+    assert summary["provider_dead"] is True
+    assert DeadProvider.calls == 1  # aborted immediately, no per-listing retries
+
+
 def test_net_area_junk_string_nulled():
     attrs = ExtractedAttributes.model_validate(
         base(net_area_sqm='1</ancony_count>\n<param name="exposure">["south"]')

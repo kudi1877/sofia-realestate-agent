@@ -323,8 +323,9 @@ def extract_listing_attributes(
     extracted = failed = 0
     spent = 0.0
     budget_exhausted = False
+    provider_dead = False
     for row in rows:
-        if spent >= budget_usd:
+        if spent >= budget_usd or provider_dead:
             budget_exhausted = True
             break
         attributes = None
@@ -336,11 +337,23 @@ def extract_listing_attributes(
                 attributes = ExtractedAttributes.model_validate(result.data)
                 break
             except Exception as exc:
+                # Account-level failures (no credits, invalid key) hit every
+                # subsequent call identically — abort the whole batch instead
+                # of burning hours retrying per listing (the 2026-07-13 backlog
+                # run wasted ~5,400 attempts against an empty credit balance).
+                message = str(exc).lower()
+                if "credit balance" in message or "authentication" in message or "invalid x-api-key" in message:
+                    logger.error(f"LLM provider unusable, aborting batch: {exc}")
+                    provider_dead = True
+                    break
                 if attempt == 1:
                     logger.warning(f"LLM extraction failed for listing {row.id} after retry: {exc}")
                 if spent >= budget_usd:
                     budget_exhausted = True
                     break
+        if provider_dead:
+            failed += 1
+            break
         if attributes is None or result is None:
             failed += 1
             continue
@@ -366,4 +379,5 @@ def extract_listing_attributes(
         "failed": failed,
         "spent_usd": round(spent, 6),
         "budget_exhausted": budget_exhausted,
+        "provider_dead": provider_dead,
     }
