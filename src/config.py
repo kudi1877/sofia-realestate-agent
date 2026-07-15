@@ -60,6 +60,16 @@ IMAGE_HASH_CACHE_PATH = Path(
     os.getenv("IMAGE_HASH_CACHE_PATH", str(DATA_DIR / "cache" / "image_phash.json"))
 ).expanduser()
 AUTHENTICITY_DEAL_MIN_SCORE = int(os.getenv("AUTHENTICITY_DEAL_MIN_SCORE", "50"))
+# Bounds the repost/phone-footprint comparison pool to recent inactive
+# listings. Without this, score_authenticity() pulled in the ENTIRE
+# historical sale corpus (30,433 rows vs 6,386 active) — the 2026-07-13
+# nightly hung for 48+ hours hashing and cross-comparing years of sold
+# listings before being killed with zero progress committed.
+AUTHENTICITY_REPOST_LOOKBACK_DAYS = int(os.getenv("AUTHENTICITY_REPOST_LOOKBACK_DAYS", "90"))
+# Defensive cap: if templated/boilerplate text collapses many listings into
+# the same near-hash bucket, skip comparing that row rather than let a
+# single pathological bucket blow up runtime.
+AUTHENTICITY_MAX_HASH_CANDIDATES = int(os.getenv("AUTHENTICITY_MAX_HASH_CANDIDATES", "400"))
 
 # FSBO/general-classified portals. OLX is enabled because its observed Sofia
 # JSON API is reachable without Cloudflare workarounds.

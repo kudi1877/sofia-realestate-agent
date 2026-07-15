@@ -4,7 +4,9 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import src.analysis.authenticity as authenticity
 from src.analysis.authenticity import (
+    _near_hash_conflicts,
     find_photo_reuse,
     lowest_scorers,
     score_authenticity,
@@ -152,3 +154,70 @@ def test_composite_score_persists_evidence_and_review_rows():
     }
     assert any(flag["conflicts"] for flag in flags if flag["signal"] != "price_plausibility")
     assert lowest_scorers(db, limit=1)[0]["id"] == suspicious.id
+
+
+def test_comparison_pool_excludes_old_inactive_listings(monkeypatch):
+    # 2026-07-13 regression: score_authenticity() pulled in the ENTIRE
+    # historical corpus (30,433 rows vs 6,386 active), which hung the
+    # nightly for 48+ hours. Listings inactive well beyond the lookback
+    # window must not be scanned at all.
+    monkeypatch.setattr(authenticity, "AUTHENTICITY_REPOST_LOOKBACK_DAYS", 90)
+    db = session()
+    active = listing("active-1", first_seen=NOW, last_seen=NOW)
+    recent_inactive = listing(
+        "recent-gone", is_active=False, last_seen=NOW - timedelta(days=10)
+    )
+    ancient_inactive = listing(
+        "ancient-gone", is_active=False, last_seen=NOW - timedelta(days=400)
+    )
+    db.add_all([active, recent_inactive, ancient_inactive])
+    db.commit()
+
+    # score_authenticity() re-derives its own cutoff from utc_now(), so
+    # exercise the query directly rather than freezing time end-to-end.
+    from datetime import timedelta as _td
+    from src.utils.time import utc_now as _utc_now
+    from sqlalchemy import or_ as _or_
+
+    cutoff = _utc_now() - _td(days=90)
+    pool_ids = {
+        row.source_id
+        for row in db.query(Listing).filter(
+            Listing.listing_kind == "sale",
+            _or_(Listing.is_duplicate.is_(False), Listing.is_duplicate.is_(None)),
+            _or_(Listing.is_active.is_(True), Listing.last_seen >= cutoff),
+        )
+    }
+    assert pool_ids == {"active-1", "recent-gone"}
+    assert "ancient-gone" not in pool_ids
+
+
+def test_near_hash_conflicts_skips_pathological_buckets(monkeypatch):
+    # Defensive cap: a bucket bigger than AUTHENTICITY_MAX_HASH_CANDIDATES
+    # must be skipped, not fully cross-compared (the actual 2026-07-13
+    # blowup mechanism when many listings share near-identical hashes).
+    monkeypatch.setattr(authenticity, "AUTHENTICITY_MAX_HASH_CANDIDATES", 2)
+    rows = [
+        listing(f"dup-{index}", image_phash="0000000000000000")
+        for index in range(5)
+    ]
+
+    conflicts = find_photo_reuse(rows)
+
+    assert conflicts == {}
+
+
+def test_near_hash_conflicts_still_matches_under_the_cap(monkeypatch):
+    monkeypatch.setattr(authenticity, "AUTHENTICITY_MAX_HASH_CANDIDATES", 400)
+    left = listing("left", image_phash="0123456789abcdef", price_eur=100000)
+    right = listing(
+        "right",
+        canonical_id="different",
+        neighborhood="Младост",
+        price_eur=400000,
+        image_phash="0123456789abcdee",
+    )
+
+    conflicts = find_photo_reuse([left, right])
+
+    assert right in conflicts[id(left)]

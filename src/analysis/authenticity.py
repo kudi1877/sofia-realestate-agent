@@ -11,8 +11,15 @@ from typing import Any, Callable, Dict, Iterable, List
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
-from src.config import AUTHENTICITY_DEAL_MIN_SCORE
+from src.config import (
+    AUTHENTICITY_DEAL_MIN_SCORE,
+    AUTHENTICITY_MAX_HASH_CANDIDATES,
+    AUTHENTICITY_REPOST_LOOKBACK_DAYS,
+)
 from src.database.models import Listing
+from src.utils.time import utc_now
+from datetime import timedelta
+from loguru import logger
 
 PHOTO_HAMMING_THRESHOLD = 6
 DESCRIPTION_HAMMING_THRESHOLD = 3
@@ -82,10 +89,18 @@ def _near_hash_conflicts(
     value_by_index = {row_index: value for row_index, value in valid}
     conflicts: Dict[int, List[Listing]] = defaultdict(list)
     checked = set()
+    skipped_rows = 0
     for row_index, value in valid:
         candidates = set()
         for band in range(8):
             candidates.update(buckets[(band, (value >> (band * 8)) & 0xFF)])
+        if len(candidates) > AUTHENTICITY_MAX_HASH_CANDIDATES:
+            # A pathologically large bucket (e.g. many listings sharing
+            # near-identical boilerplate text) turns this from bounded LSH
+            # lookup into effective O(n^2) — skip rather than hang (this is
+            # exactly what took the 2026-07-13 nightly down for 48+ hours).
+            skipped_rows += 1
+            continue
         for other_index in candidates:
             pair = tuple(sorted((row_index, other_index)))
             if row_index == other_index or pair in checked:
@@ -102,6 +117,11 @@ def _near_hash_conflicts(
                 continue
             conflicts[id(left)].append(right)
             conflicts[id(right)].append(left)
+    if skipped_rows:
+        logger.warning(
+            f"Authenticity hash matching skipped {skipped_rows} row(s) with "
+            f">{AUTHENTICITY_MAX_HASH_CANDIDATES} bucket candidates"
+        )
     return conflicts
 
 
@@ -186,19 +206,32 @@ def _flag(
 
 
 def score_authenticity(db: Session) -> Dict[str, Any]:
-    """Recompute authenticity for active unique sale inventory."""
+    """Recompute authenticity for active unique sale inventory.
+
+    Comparison pool is bounded to active listings plus a recent inactive
+    window (AUTHENTICITY_REPOST_LOOKBACK_DAYS) — NOT the full historical
+    corpus. Scoring against listings that sold months ago is both pointless
+    (buyers only care about live bait-ad matches) and, at full-history scale,
+    was what hung the 2026-07-13 nightly for 48+ hours (30,433 rows cross-
+    hashed instead of ~6,400 active ones).
+    """
+    cutoff = utc_now() - timedelta(days=AUTHENTICITY_REPOST_LOOKBACK_DAYS)
     all_rows = (
         db.query(Listing)
         .options(selectinload(Listing.alerts))
         .filter(
             Listing.listing_kind == "sale",
             or_(Listing.is_duplicate.is_(False), Listing.is_duplicate.is_(None)),
+            or_(Listing.is_active.is_(True), Listing.last_seen >= cutoff),
         )
         .all()
     )
     targets = [row for row in all_rows if row.is_active]
-    photo_conflicts = find_photo_reuse(all_rows)
-    description_conflicts = find_description_reuse(all_rows)
+    # Photo/description reuse only needs to catch CURRENTLY live bait ads —
+    # compare active listings against each other, not the recent-inactive
+    # window (which exists only for the phone/repost check below).
+    photo_conflicts = find_photo_reuse(targets)
+    description_conflicts = find_description_reuse(targets)
 
     active_by_phone: Dict[str, Dict[str, Listing]] = defaultdict(dict)
     inactive_by_repost_key: Dict[tuple[Any, ...], List[Listing]] = defaultdict(list)
