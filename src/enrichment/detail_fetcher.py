@@ -10,11 +10,18 @@ from typing import Callable, Dict, Iterable, List, Protocol
 
 import httpx
 from bs4 import BeautifulSoup
+
+from src.utils.soup import make_soup
 from loguru import logger
 from sqlalchemy import exists, func, or_
 from sqlalchemy.orm import Session
 
-from src.config import ENRICH_DELAY_SECONDS, ENRICH_MAX_PER_RUN, USER_AGENTS
+from src.config import (
+    ENRICH_DELAY_SECONDS,
+    ENRICH_MAX_PER_RUN,
+    SCRAPE_MAX_PARALLEL_SOURCES,
+    USER_AGENTS,
+)
 from src.database.models import Listing, PriceHistory
 from src.scrapers.homesbg import HomesBgScraper
 from src.scrapers.imotbg import ImotBgScraper
@@ -66,6 +73,90 @@ def select_enrichment_candidates(db: Session, *, max_per_run: int) -> List[Listi
     return _round_robin(rows, max_per_run)
 
 
+def _fetch_lane(
+    source: str,
+    rows: List[Dict[str, object]],
+    *,
+    delay_seconds: float,
+    client: HttpClient | None,
+    sleep: Callable[[float], None],
+) -> Dict[str, object]:
+    """Network+parse for one source lane — NO database access (TIN-518).
+
+    Runs serially with per-request delays against its own host; three
+    consecutive 403/429 responses back the whole lane off. Returns plain
+    data so the caller can apply results on the main thread/session.
+    """
+    owns_client = client is None
+    lane_client = client or httpx.Client(follow_redirects=True, timeout=30)
+    results: List[Dict[str, object]] = []
+    consecutive_blocked = 0
+    blocked_status = None
+    backed_off = False
+    requested = failed = 0
+    last_request_at = None
+    try:
+        for index, row in enumerate(rows):
+            if backed_off:
+                break
+            if last_request_at is not None:
+                elapsed = time.monotonic() - last_request_at
+                if elapsed < delay_seconds:
+                    sleep(delay_seconds - elapsed)
+            try:
+                response = lane_client.get(
+                    row["url"],
+                    headers={"User-Agent": USER_AGENTS[index % len(USER_AGENTS)]},
+                )
+                last_request_at = time.monotonic()
+                requested += 1
+            except (httpx.HTTPError, OSError) as exc:
+                logger.warning(f"Detail fetch failed for {source}:{row['source_id']}: {exc}")
+                failed += 1
+                continue
+
+            if response.status_code in (403, 429):
+                failed += 1
+                consecutive_blocked += 1
+                blocked_status = response.status_code
+                if consecutive_blocked >= 3:
+                    backed_off = True
+                    logger.warning(
+                        f"Detail enrichment backed off {source} after 3 consecutive "
+                        f"HTTP {response.status_code} responses"
+                    )
+                continue
+            consecutive_blocked = 0
+            if response.status_code >= 400:
+                failed += 1
+                continue
+
+            parser = DETAIL_PARSERS[source]
+            encoding = SOURCE_ENCODINGS.get(source, response.encoding or "utf-8")
+            text = response.content.decode(encoding, errors="replace")
+            try:
+                detail = parser(make_soup(text))
+            except Exception as exc:
+                logger.warning(f"Detail parse failed for {source}:{row['source_id']}: {exc}")
+                failed += 1
+                continue
+            if not detail or not any(detail.get(key) for key in ("description_full", "image_urls", "address")):
+                failed += 1
+                continue
+            results.append({"listing_id": row["id"], "detail": detail})
+    finally:
+        if owns_client:
+            lane_client.close()
+    return {
+        "source": source,
+        "results": results,
+        "requested": requested,
+        "failed": failed,
+        "backed_off": backed_off,
+        "blocked_status": blocked_status,
+    }
+
+
 def enrich_listing_details(
     db: Session,
     *,
@@ -75,74 +166,69 @@ def enrich_listing_details(
     sleep: Callable[[float], None] = time.sleep,
     recorder=None,
 ) -> Dict[str, object]:
-    """Fetch and persist detail fields; three 403/429s pause that source."""
+    """Fetch and persist detail fields; three 403/429s pause that source.
+
+    TIN-518: sources fetch in PARALLEL lanes (each lane serial + delayed
+    against its own host — per-host politeness unchanged; wall time drops
+    from Σ sources to the slowest lane). All ORM writes happen here on the
+    caller's session after the network phase. An injected `client` (tests)
+    forces the sequential path for determinism.
+    """
     candidates = select_enrichment_candidates(db, max_per_run=max_per_run)
-    owns_client = client is None
-    if client is None:
-        client = httpx.Client(follow_redirects=True, timeout=30)
+    by_source: Dict[str, List[Listing]] = defaultdict(list)
+    for listing in candidates:
+        by_source[listing.source].append(listing)
+    listing_by_id = {listing.id: listing for listing in candidates}
 
-    consecutive_blocked: Dict[str, int] = defaultdict(int)
-    backed_off = set()
-    requested = enriched = failed = 0
-    last_request_at = None
-    try:
-        for index, listing in enumerate(candidates):
-            if listing.source in backed_off:
-                continue
-            if last_request_at is not None:
-                elapsed = time.monotonic() - last_request_at
-                if elapsed < delay_seconds:
-                    sleep(delay_seconds - elapsed)
-            try:
-                response = client.get(
-                    listing.url,
-                    headers={"User-Agent": USER_AGENTS[index % len(USER_AGENTS)]},
+    lane_inputs = [
+        (
+            source,
+            [
+                {"id": listing.id, "source_id": listing.source_id, "url": listing.url}
+                for listing in rows
+            ],
+        )
+        for source, rows in by_source.items()
+    ]
+
+    if client is not None or len(lane_inputs) <= 1:
+        lane_summaries = [
+            _fetch_lane(source, rows, delay_seconds=delay_seconds, client=client, sleep=sleep)
+            for source, rows in lane_inputs
+        ]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(SCRAPE_MAX_PARALLEL_SOURCES, len(lane_inputs))) as pool:
+            lane_summaries = list(
+                pool.map(
+                    lambda item: _fetch_lane(
+                        item[0], item[1], delay_seconds=delay_seconds, client=None, sleep=sleep
+                    ),
+                    lane_inputs,
                 )
-                last_request_at = time.monotonic()
-                requested += 1
-            except (httpx.HTTPError, OSError) as exc:
-                logger.warning(f"Detail fetch failed for {listing.source}:{listing.source_id}: {exc}")
-                failed += 1
-                continue
+            )
 
-            if response.status_code in (403, 429):
-                failed += 1
-                consecutive_blocked[listing.source] += 1
-                if consecutive_blocked[listing.source] >= 3:
-                    backed_off.add(listing.source)
-                    message = f"Detail enrichment backed off {listing.source} after 3 consecutive HTTP {response.status_code} responses"
-                    logger.warning(message)
-                    if recorder is not None:
-                        recorder.add_error(message)
-                continue
-            consecutive_blocked[listing.source] = 0
-            if response.status_code >= 400:
-                failed += 1
-                continue
-
-            parser = DETAIL_PARSERS[listing.source]
-            encoding = SOURCE_ENCODINGS.get(listing.source, response.encoding or "utf-8")
-            text = response.content.decode(encoding, errors="replace")
-            try:
-                detail = parser(BeautifulSoup(text, "html.parser"))
-            except Exception as exc:
-                logger.warning(f"Detail parse failed for {listing.source}:{listing.source_id}: {exc}")
-                failed += 1
-                continue
-            if not detail or not any(detail.get(key) for key in ("description_full", "image_urls", "address")):
-                failed += 1
-                continue
-
-            _apply_detail(listing, detail)
+    requested = enriched = failed = 0
+    backed_off = set()
+    for lane in lane_summaries:
+        requested += lane["requested"]
+        failed += lane["failed"]
+        if lane["backed_off"]:
+            backed_off.add(lane["source"])
+            if recorder is not None:
+                recorder.add_error(
+                    f"Detail enrichment backed off {lane['source']} after 3 consecutive "
+                    f"HTTP {lane['blocked_status']} responses"
+                )
+        for item in lane["results"]:
+            listing = listing_by_id[item["listing_id"]]
+            _apply_detail(listing, item["detail"])
             listing.enriched_at = utc_now()
             enriched += 1
             if enriched % 25 == 0:
                 db.commit()
-
-        db.commit()
-    finally:
-        if owns_client:
-            client.close()
+    db.commit()
 
     _log_phone_merge_candidates(db)
     summary: Dict[str, object] = {

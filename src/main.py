@@ -33,6 +33,7 @@ from src.config import (
     MIN_PRICE_EUR,
     MIN_RENT_EUR,
     PUBLISH_MIN_MEDIAN_EUR_SQM,
+    SCRAPE_MAX_PARALLEL_SOURCES,
     SOLD_AFTER_DAYS,
 )
 from src.utils.deduplication import deduplicate_listings, get_duplicate_stats
@@ -87,7 +88,15 @@ def cmd_scrape(recorder=None):
         ]
     )
 
-    for display_name, source_key, factory in SCRAPERS:
+    # TIN-518: sources run in PARALLEL lanes — wall time drops from the sum
+    # of all sources (~25-30 min at 10 sources) to the slowest single lane.
+    # Politeness is preserved two ways: each scraper keeps its own serial
+    # per-request delays, and sources hitting the SAME host (imot.bg sale +
+    # rent, homes.bg sale + rent) share one lane so a site never sees
+    # doubled request rates. Only the worker threads scrape; all recorder
+    # appends and DB writes stay on this (main) thread.
+    def _run_source(entry):
+        display_name, source_key, factory = entry
         t0 = _time.time()
         try:
             scraper = factory()
@@ -98,23 +107,45 @@ def cmd_scrape(recorder=None):
             else:
                 listings = scraper.scrape()
             logger.info(f"{display_name}: scraped {len(listings)} listings")
+            return source_key, listings, round(_time.time() - t0, 1), None
+        except Exception as e:
+            logger.error(f"Error scraping {display_name}: {e}")
+            return source_key, None, round(_time.time() - t0, 1), str(e)[:200]
+
+    def _run_lane(entries):
+        return [_run_source(entry) for entry in entries]
+
+    lanes: Dict[str, list] = {}
+    for entry in SCRAPERS:
+        # imotbg-rent shares imot.bg's lane; homesbg-rent shares homes.bg's.
+        lanes.setdefault(entry[1].split("-")[0], []).append(entry)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(SCRAPE_MAX_PARALLEL_SOURCES, len(lanes))) as pool:
+        lane_results = list(pool.map(_run_lane, lanes.values()))
+    results_by_key = {
+        source_key: (listings, duration, error)
+        for lane in lane_results
+        for source_key, listings, duration, error in lane
+    }
+
+    for display_name, source_key, _factory in SCRAPERS:
+        listings, duration, error = results_by_key[source_key]
+        if error is None:
             all_listings.extend(listings)
             active_source_ids[source_key] = [l['source_id'] for l in listings]
             if recorder is not None:
-                status = "ok" if listings else "empty"
                 recorder.add_source(SourceResult(
                     name=display_name, scraped=len(listings),
-                    duration_sec=round(_time.time() - t0, 1), status=status,
+                    duration_sec=duration, status="ok" if listings else "empty",
                 ))
-        except Exception as e:
-            logger.error(f"Error scraping {display_name}: {e}")
-            if recorder is not None:
-                recorder.add_source(SourceResult(
-                    name=display_name, scraped=0,
-                    duration_sec=round(_time.time() - t0, 1),
-                    status="error", error=str(e)[:200],
-                ))
-                recorder.add_error(f"{display_name}: {str(e)[:200]}")
+        elif recorder is not None:
+            recorder.add_source(SourceResult(
+                name=display_name, scraped=0,
+                duration_sec=duration, status="error", error=error,
+            ))
+            recorder.add_error(f"{display_name}: {error}")
     
     # Canonicalize neighborhood names before dedup/stats (TIN-468): merges
     # imoti.net's Latin slugs ("Bankja") and prefixed variants ("гр. Банкя")

@@ -8,6 +8,8 @@ from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
+
+from src.utils.soup import make_soup
 from loguru import logger
 
 from src.config import USER_AGENTS, SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX
@@ -64,7 +66,7 @@ class BaseScraper(ABC):
                 
                 self._request_count += 1
                 
-                return BeautifulSoup(text, "html.parser")
+                return make_soup(text)
                 
             except httpx.HTTPStatusError as e:
                 logger.warning(f"HTTP error {e.response.status_code} for {url}: {e}")

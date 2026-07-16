@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from bs4 import BeautifulSoup
+
+from src.utils.soup import make_soup
 from loguru import logger
 
 from src.config import EUR_BGN_RATE, OLX_MAX_PAGES
@@ -137,7 +139,7 @@ class OlxScraper(BaseScraper):
             template = str(photos[0].get("link") or "")
             image_url = template.replace("{width}", "640").replace("{height}", "480") or None
 
-        description = BeautifulSoup(str(item.get("description") or ""), "html.parser").get_text(" ", strip=True)
+        description = make_soup(str(item.get("description") or "")).get_text(" ", strip=True)
         return {
             "source": "olx",
             "source_id": str(item.get("id") or ""),

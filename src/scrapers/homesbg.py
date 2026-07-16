@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 import httpx
 from loguru import logger
 
-from src.config import EUR_BGN_RATE, SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX
+from src.config import EUR_BGN_RATE, SCRAPE_API_DELAY_MIN, SCRAPE_API_DELAY_MAX
 
 
 class HomesBgScraper:
@@ -278,7 +278,10 @@ class HomesBgScraper:
             'Accept': 'application/json',
             'Referer': 'https://www.homes.bg/',
         }
-        
+
+        # TIN-518: one client for the whole run (keep-alive instead of a new
+        # TCP+TLS handshake per page) and the faster JSON-API cadence.
+        client = httpx.Client(follow_redirects=True, timeout=30, headers=headers)
         page = 1
         while page <= self.max_pages:
             params = self._request_params(page, self.listing_kind)
@@ -286,18 +289,12 @@ class HomesBgScraper:
                 f"Scraping homes.bg Sofia API page {page} "
                 f"(results {params['startIndex']}-{params['stopIndex']})"
             )
-            
-            # Rate limit
-            time.sleep(random.uniform(SCRAPE_DELAY_MIN, SCRAPE_DELAY_MAX))
-            
+
+            # Rate limit (JSON API tier)
+            time.sleep(random.uniform(SCRAPE_API_DELAY_MIN, SCRAPE_API_DELAY_MAX))
+
             try:
-                resp = httpx.get(
-                    self.API_URL,
-                    params=params,
-                    headers=headers,
-                    follow_redirects=True,
-                    timeout=30,
-                )
+                resp = client.get(self.API_URL, params=params)
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as e:
@@ -337,7 +334,8 @@ class HomesBgScraper:
                 break
             
             page += 1
-        
+
+        client.close()
         logger.info(
             f"Homes.bg API reported {api_total_count if api_total_count is not None else 'unknown'} "
             f"Sofia apartment listings; scraped {len(all_listings)}"

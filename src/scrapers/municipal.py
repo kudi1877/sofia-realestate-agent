@@ -28,6 +28,8 @@ from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 from bs4 import BeautifulSoup
+
+from src.utils.soup import make_soup
 from loguru import logger
 from pdfminer.high_level import extract_text as pdf_extract_text
 from pydantic import BaseModel, ConfigDict, Field
@@ -336,14 +338,14 @@ class MunicipalNoticeWatcher:
                 logger.warning(f"Municipal watcher could not fetch {message}")
                 self.source_errors.append(message)
                 break
-            parsed = self.parse_index(BeautifulSoup(response.text, "html.parser"), "sofia_tenders")
+            parsed = self.parse_index(make_soup(response.text), "sofia_tenders")
             notices.extend(parsed)
             if not parsed:
                 break
 
         try:
             response = self._get(SOAPI_URL)
-            notices.extend(self.parse_index(BeautifulSoup(response.text, "html.parser"), "soapi"))
+            notices.extend(self.parse_index(make_soup(response.text), "soapi"))
         except Exception as exc:
             message = f"soapi: {exc}"
             logger.warning(f"Municipal watcher could not fetch {message}")
@@ -358,7 +360,7 @@ class MunicipalNoticeWatcher:
         except Exception as exc:
             logger.warning(f"Municipal detail fetch failed for {notice.url}: {exc}")
             return None, None
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = make_soup(response.text)
         candidates = soup.select(".asset-full-content, .asset-content, .journal-content-article, main")
         # SOAPI renders a shared 650-character agency header before the actual
         # 1-2k decision article. Longest content reliably selects the decision.

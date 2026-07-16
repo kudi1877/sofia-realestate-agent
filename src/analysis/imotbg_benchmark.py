@@ -17,6 +17,8 @@ from typing import Dict, Optional
 
 import httpx
 from bs4 import BeautifulSoup
+
+from src.utils.soup import make_soup
 from loguru import logger
 
 from src.utils.neighborhoods import canonicalize_neighborhood
@@ -35,7 +37,7 @@ def parse_benchmark_table(html: str) -> Dict[str, float]:
     Row shape: [Район, 1-room price, €/m², 2-room price, €/m²,
                 3-room price, €/m², overall €/m²] — we take the last column.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = make_soup(html)
     table = soup.find("table")
     if not table:
         return {}

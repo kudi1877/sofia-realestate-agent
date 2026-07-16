@@ -18,6 +18,12 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/listings.db")
 # Scraping settings
 SCRAPE_DELAY_MIN = float(os.getenv("SCRAPE_DELAY_MIN", "1.0"))
 SCRAPE_DELAY_MAX = float(os.getenv("SCRAPE_DELAY_MAX", "3.0"))
+# JSON-API sources tolerate a faster cadence than scraped HTML pages.
+SCRAPE_API_DELAY_MIN = float(os.getenv("SCRAPE_API_DELAY_MIN", "0.5"))
+SCRAPE_API_DELAY_MAX = float(os.getenv("SCRAPE_API_DELAY_MAX", "1.0"))
+# TIN-518: sources scrape in parallel lanes (same-host sources share a lane
+# so no site ever sees more than its usual serial request rate).
+SCRAPE_MAX_PARALLEL_SOURCES = int(os.getenv("SCRAPE_MAX_PARALLEL_SOURCES", "6"))
 MARK_INACTIVE_MIN_RATIO = float(os.getenv("MARK_INACTIVE_MIN_RATIO", "0.5"))
 SOLD_AFTER_DAYS = int(os.getenv("SOLD_AFTER_DAYS", "14"))
 PING_MAX_PER_RUN = int(os.getenv("PING_MAX_PER_RUN", "400"))

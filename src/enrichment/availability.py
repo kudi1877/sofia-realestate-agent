@@ -131,38 +131,67 @@ def ping_availability(
     client: HttpClient | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Dict[str, int]:
-    """Check selected ads, persisting only confirmed live/gone outcomes."""
+    """Check selected ads, persisting only confirmed live/gone outcomes.
+
+    TIN-518: pings run in parallel per-source lanes — each lane keeps the
+    serial per-request delay against its own host, so no site sees a faster
+    rate than before, but wall time drops from Σ pings to the largest lane.
+    All ORM writes happen on the caller's session after the network phase.
+    An injected `client` (tests) forces the sequential single-lane path.
+    """
     candidates = select_candidates(db, max_per_run=max_per_run, recent_days=recent_days)
     counts = {"pinged": 0, "live": 0, "gone": 0, "unknown": 0}
-    owns_client = client is None
-    if client is None:
-        client = httpx.Client(follow_redirects=True, timeout=30)
 
-    try:
-        for index, listing in enumerate(candidates):
-            if index:
-                sleep(delay_seconds)
-            try:
-                response = client.get(
-                    listing.url,
-                    headers={"User-Agent": USER_AGENTS[index % len(USER_AGENTS)]},
-                )
-                outcome = classify_response(listing.source, listing.url, response)
-            except (httpx.HTTPError, OSError) as exc:
-                logger.warning(f"Availability check failed for {listing.source}:{listing.source_id}: {exc}")
-                outcome = "unknown"
+    def _ping_lane(rows: list) -> list:
+        owns_client = client is None
+        lane_client = client or httpx.Client(follow_redirects=True, timeout=30)
+        outcomes = []
+        try:
+            for index, row in enumerate(rows):
+                if index:
+                    sleep(delay_seconds)
+                source, source_id, url, listing_id = row
+                try:
+                    response = lane_client.get(
+                        url, headers={"User-Agent": USER_AGENTS[index % len(USER_AGENTS)]}
+                    )
+                    outcome = classify_response(source, url, response)
+                except (httpx.HTTPError, OSError) as exc:
+                    logger.warning(f"Availability check failed for {source}:{source_id}: {exc}")
+                    outcome = "unknown"
+                outcomes.append((listing_id, outcome))
+        finally:
+            if owns_client:
+                lane_client.close()
+        return outcomes
 
+    lanes: dict = {}
+    for listing in candidates:
+        lanes.setdefault(listing.source, []).append(
+            (listing.source, listing.source_id, listing.url, listing.id)
+        )
+
+    if client is not None or len(lanes) <= 1:
+        lane_outcomes = [_ping_lane(rows) for rows in lanes.values()]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        from src.config import SCRAPE_MAX_PARALLEL_SOURCES
+
+        with ThreadPoolExecutor(max_workers=min(SCRAPE_MAX_PARALLEL_SOURCES, len(lanes))) as pool:
+            lane_outcomes = list(pool.map(_ping_lane, lanes.values()))
+
+    listing_by_id = {listing.id: listing for listing in candidates}
+    for outcomes in lane_outcomes:
+        for listing_id, outcome in outcomes:
+            listing = listing_by_id[listing_id]
             counts["pinged"] += 1
             counts[outcome] += 1
             if outcome in ("live", "gone"):
                 listing.availability_checked_at = utc_now()
             if outcome == "gone":
                 listing.is_active = False
-
-        db.commit()
-    finally:
-        if owns_client:
-            client.close()
+    db.commit()
 
     logger.info(
         "Availability: {pinged} pinged, {live} live, {gone} gone, {unknown} unknown".format(**counts)

@@ -70,11 +70,19 @@ def test_scrape_continues_when_api_page_has_no_parsed_sofia_matches(monkeypatch)
     ]
     requested_params = []
 
-    def fake_get(url, *, params, **kwargs):
-        requested_params.append(params)
-        return FakeResponse(payloads.pop(0))
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    monkeypatch.setattr("src.scrapers.homesbg.httpx.get", fake_get)
+        def get(self, url, *, params, **kwargs):
+            requested_params.append(params)
+            return FakeResponse(payloads.pop(0))
+
+        def close(self):
+            pass
+
+    # TIN-518 switched the scraper from module-level httpx.get to a reused Client.
+    monkeypatch.setattr("src.scrapers.homesbg.httpx.Client", FakeClient)
     monkeypatch.setattr("src.scrapers.homesbg.time.sleep", lambda _seconds: None)
 
     listings = HomesBgScraper(max_pages=2).scrape()
