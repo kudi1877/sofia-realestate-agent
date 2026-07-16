@@ -20,6 +20,8 @@ data during a run; .finalize() spits out the dict that ends up in runs.json.
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
@@ -180,21 +182,46 @@ class RunRecorder:
         return d
 
 
+STEP_HEARTBEAT_SECONDS = int(os.getenv("STEP_HEARTBEAT_SECONDS", "600"))
+
+
 class _StepCtx:
-    """Context manager that records duration of one named pipeline step."""
+    """Context manager that records duration of one named pipeline step.
+
+    TIN-517: also runs a daemon heartbeat that WARNS every 10 minutes while
+    the step is still executing. The 2026-07-13 and 2026-07-16 incidents
+    both hung silently inside a step for hours/days with zero log output —
+    a slow or stuck step must announce itself, not disappear.
+    """
     def __init__(self, recorder: RunRecorder, name: str):
         self.recorder = recorder
         self.name = name
         self._start: float = 0.0
+        self._stop_heartbeat: threading.Event | None = None
 
     def __enter__(self):
         self._start = time.time()
         self.recorder._step_start[self.name] = self._start
+        self._stop_heartbeat = threading.Event()
+        stop = self._stop_heartbeat
+        name = self.name
+        start = self._start
+
+        def _heartbeat():
+            while not stop.wait(STEP_HEARTBEAT_SECONDS):
+                minutes = (time.time() - start) / 60
+                logger.warning(
+                    f"Pipeline step '{name}' still running after {minutes:.0f} minutes"
+                )
+
+        threading.Thread(target=_heartbeat, daemon=True, name=f"heartbeat-{name}").start()
         return self
 
     def __exit__(self, exc_type, exc, tb):
         # Don't swallow exceptions — let them bubble up. We just record duration.
         # If exception happened, the recorder caller can call add_error() too.
+        if self._stop_heartbeat is not None:
+            self._stop_heartbeat.set()
         return False
 
 

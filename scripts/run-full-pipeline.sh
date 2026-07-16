@@ -57,8 +57,39 @@ cd "$REPO_DIR"
     fi
     echo "Python: $PY"
 
-    "$PY" -m src.main full
+    # ── Watchdog (TIN-517) ────────────────────────────────────────────────
+    # The 2026-07-13 run hung for 48+ hours and silently blocked the next
+    # two nightly launches. Hard rule: if the pipeline exceeds
+    # MAX_PIPELINE_HOURS (default 3), kill it, log loudly, and exit non-zero
+    # so tomorrow's launchd run starts from a clean slate no matter what.
+    MAX_PIPELINE_HOURS="${MAX_PIPELINE_HOURS:-3}"
+    MAX_PIPELINE_SECS=$(( MAX_PIPELINE_HOURS * 3600 ))
+
+    "$PY" -m src.main full &
+    PIPELINE_PID=$!
+
+    (
+        sleep "$MAX_PIPELINE_SECS"
+        if kill -0 "$PIPELINE_PID" 2>/dev/null; then
+            echo "WATCHDOG: pipeline exceeded ${MAX_PIPELINE_HOURS}h — killing PID $PIPELINE_PID at $(date '+%Y-%m-%d %H:%M:%S %Z')"
+            kill -TERM "$PIPELINE_PID" 2>/dev/null
+            sleep 30
+            kill -KILL "$PIPELINE_PID" 2>/dev/null || true
+        fi
+    ) &
+    WATCHDOG_PID=$!
+
+    # (script intentionally runs without `set -e` — see header)
+    wait "$PIPELINE_PID"
+    PIPELINE_RC=$?
+    # Pipeline done (or killed) — retire the watchdog subshell.
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+
+    if [ "$PIPELINE_RC" -ne 0 ]; then
+        echo "Pipeline exited with code $PIPELINE_RC at $(date '+%Y-%m-%d %H:%M:%S %Z')"
+    fi
 
     echo
     echo "Pipeline finished at $(date '+%Y-%m-%d %H:%M:%S %Z')"
+    exit "$PIPELINE_RC"
 } >> "$LOG_FILE" 2>&1
