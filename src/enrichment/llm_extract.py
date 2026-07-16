@@ -103,6 +103,24 @@ class ExtractedAttributes(BaseModel):
                 return None
         return value
 
+    @field_validator("view", "heating_detail", mode="before")
+    @classmethod
+    def clip_long_text(cls, value):
+        # The model narrates past max_length=160 ('view' listing every nearby
+        # school and mall — 65 rejected extractions on the 2026-07-16
+        # finishing pass). Truncated text beats a paid-for validation failure.
+        if isinstance(value, str) and len(value) > 160:
+            return value[:157] + "..."
+        return value
+
+    @field_validator("red_flags", mode="before")
+    @classmethod
+    def clip_red_flags(cls, value):
+        # Same defence for the list cap (max 12 items).
+        if isinstance(value, list):
+            return [str(item)[:157] + "..." if len(str(item)) > 160 else item for item in value[:12]]
+        return value
+
     @field_validator("gross_area_includes", mode="before")
     @classmethod
     def drop_unrecognized_area_components(cls, value):

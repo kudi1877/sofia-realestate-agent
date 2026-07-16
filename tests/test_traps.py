@@ -116,6 +116,18 @@ def test_unrecognized_gross_area_components_dropped_not_fatal():
     assert attrs.gross_area_includes == ["common_parts", "balcony"]
 
 
+def test_overlong_free_text_truncated_not_fatal():
+    # 2026-07-16 finishing pass: 'view' prose past max_length=160 rejected 65
+    # billed extractions. Long strings must clip, never fail.
+    attrs = ExtractedAttributes.model_validate(
+        base(view="Quiet residential area " * 20, red_flags=["x" * 300] + ["ok"] * 14)
+    )
+    assert len(attrs.view) == 160
+    assert attrs.view.endswith("...")
+    assert len(attrs.red_flags) == 12
+    assert len(attrs.red_flags[0]) == 160
+
+
 def test_net_area_junk_string_nulled():
     attrs = ExtractedAttributes.model_validate(
         base(net_area_sqm='1</ancony_count>\n<param name="exposure">["south"]')
