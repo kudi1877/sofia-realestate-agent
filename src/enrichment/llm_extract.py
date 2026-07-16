@@ -103,6 +103,17 @@ class ExtractedAttributes(BaseModel):
                 return None
         return value
 
+    @field_validator("gross_area_includes", mode="before")
+    @classmethod
+    def drop_unrecognized_area_components(cls, value):
+        # Same failure mode as unrecognized_enum_to_unknown, list form: the
+        # model volunteers items like 'internal_stairs' (seen on the 2026-07-16
+        # run) and the whole billed extraction is rejected. Keep what fits.
+        allowed = {"common_parts", "balcony", "terrace", "attic", "basement", "garage", "yard"}
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, str) and item.strip().lower() in allowed]
+        return value
+
     @field_validator("renovation_state", "parking", "construction_stage", "land_status", mode="before")
     @classmethod
     def unrecognized_enum_to_unknown(cls, value, info):

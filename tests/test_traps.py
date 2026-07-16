@@ -107,6 +107,15 @@ def test_improvised_enum_values_coerce_instead_of_failing():
     assert attrs.land_status == "unknown"
 
 
+def test_unrecognized_gross_area_components_dropped_not_fatal():
+    # 2026-07-16 run: 'internal_stairs' in gross_area_includes rejected the
+    # whole billed extraction. Unknown list items must be filtered out.
+    attrs = ExtractedAttributes.model_validate(
+        base(gross_area_includes=["common_parts", "internal_stairs", "balcony"])
+    )
+    assert attrs.gross_area_includes == ["common_parts", "balcony"]
+
+
 def test_net_area_junk_string_nulled():
     attrs = ExtractedAttributes.model_validate(
         base(net_area_sqm='1</ancony_count>\n<param name="exposure">["south"]')
