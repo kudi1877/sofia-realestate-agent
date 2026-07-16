@@ -89,6 +89,24 @@ def test_billing_error_aborts_batch_fast():
     assert DeadProvider.calls == 1  # aborted immediately, no per-listing retries
 
 
+def test_improvised_enum_values_coerce_instead_of_failing():
+    # 2026-07-16: the model answered renovation_state='completed', which the
+    # strict Literal rejected — 149 of 300 billed extractions failed. Any
+    # out-of-vocabulary enum value must degrade, never fail.
+    attrs = ExtractedAttributes.model_validate(
+        base(
+            renovation_state="completed",
+            parking="underground",
+            construction_stage="act16",
+            land_status="urban",
+        )
+    )
+    assert attrs.renovation_state == "renovated"
+    assert attrs.parking == "unknown"
+    assert attrs.construction_stage == "completed"
+    assert attrs.land_status == "unknown"
+
+
 def test_net_area_junk_string_nulled():
     attrs = ExtractedAttributes.model_validate(
         base(net_area_sqm='1</ancony_count>\n<param name="exposure">["south"]')

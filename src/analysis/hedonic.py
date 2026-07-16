@@ -394,25 +394,46 @@ def load_artifact(path: Path | None = None, *, model_dir: Path = HEDONIC_MODEL_D
     return artifact
 
 
-def _top_contributions(
+def _contribution_effects(
     artifact: HedonicArtifact,
-    transformed_row: np.ndarray,
-) -> List[Dict[str, Any]]:
+    transformed: np.ndarray,
+    log_predictions: np.ndarray,
+) -> np.ndarray:
+    """Per-feature effect matrix (n_rows × n_features), fully vectorized.
+
+    The previous implementation predicted ONE ROW AT A TIME — a full
+    prediction plus one counterfactual predict per feature per listing
+    (~150k+ single-row sklearn calls, each spinning up an OpenMP parallel
+    region for one sample). That turned nightly scoring into a multi-hour
+    CPU-pegged grind (2026-07-16 run: 5+ silent hours; 2026-07-12: 1h46m).
+    Batch form: one counterfactual predict of the WHOLE matrix per feature
+    — ~n_features calls total, seconds.
+    """
     if artifact.backend == "numpy_ridge_fallback":
-        effects = artifact.model.coef_[1:] * transformed_row
-    else:
-        base = transformed_row.copy()
-        effects = np.zeros_like(transformed_row)
-        full = float(artifact.model.predict(transformed_row.reshape(1, -1))[0])
-        for index in range(len(transformed_row)):
-            counterfactual = base.copy()
-            counterfactual[index] = 0
-            effects[index] = full - float(artifact.model.predict(counterfactual.reshape(1, -1))[0])
-    ranked = sorted(range(len(effects)), key=lambda index: abs(effects[index]), reverse=True)[:5]
+        return artifact.model.coef_[1:] * transformed
+
+    n_rows, n_features = transformed.shape
+    effects = np.zeros((n_rows, n_features), dtype=float)
+    counterfactual = transformed.copy()
+    for index in range(n_features):
+        saved = counterfactual[:, index].copy()
+        counterfactual[:, index] = 0
+        effects[:, index] = log_predictions - np.asarray(
+            artifact.model.predict(counterfactual), dtype=float
+        )
+        counterfactual[:, index] = saved
+    return effects
+
+
+def _format_top_contributions(
+    artifact: HedonicArtifact,
+    effects_row: np.ndarray,
+) -> List[Dict[str, Any]]:
+    ranked = sorted(range(len(effects_row)), key=lambda index: abs(effects_row[index]), reverse=True)[:5]
     return [
         {
             "feature": artifact.encoder.feature_names[index],
-            "impact_pct": round((math.exp(float(effects[index])) - 1) * 100, 2),
+            "impact_pct": round((math.exp(float(effects_row[index])) - 1) * 100, 2),
         }
         for index in ranked
     ]
@@ -439,12 +460,13 @@ def score(
     frame = _listing_frame(rows)
     log_predictions, transformed = artifact.predict_log(frame)
     predictions = np.exp(log_predictions)
+    effects = _contribution_effects(artifact, np.asarray(transformed), log_predictions)
     for index, row in enumerate(rows):
         predicted = float(predictions[index])
         row.predicted_price_per_sqm = round(predicted, 2)
         row.residual_pct = round((float(row.price_per_sqm_eur) - predicted) / predicted * 100, 2)
         row.hedonic_contributions = json.dumps(
-            _top_contributions(artifact, transformed[index]),
+            _format_top_contributions(artifact, effects[index]),
             ensure_ascii=False,
         )
     db.commit()

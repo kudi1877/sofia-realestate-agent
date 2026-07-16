@@ -103,6 +103,30 @@ class ExtractedAttributes(BaseModel):
                 return None
         return value
 
+    @field_validator("renovation_state", "parking", "construction_stage", "land_status", mode="before")
+    @classmethod
+    def unrecognized_enum_to_unknown(cls, value, info):
+        # Models improvise values outside the Literal ('completed' for
+        # renovation_state failed 149 of 300 billed extractions on the
+        # 2026-07-16 nightly — ~$1 paid for rejected answers). A degraded
+        # 'unknown' beats a paid-for validation failure. Known synonyms are
+        # mapped per field; anything else coerces to 'unknown'.
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip().lower()
+        synonyms = {
+            "renovation_state": {"completed": "renovated", "new": "turnkey", "good": "renovated"},
+            "construction_stage": {"act16": "completed", "act 16": "completed", "na_zeleno": "off_plan"},
+        }.get(info.field_name, {})
+        cleaned = synonyms.get(cleaned, cleaned)
+        allowed = {
+            "renovation_state": {"turnkey", "renovated", "needs_renovation", "unfinished", "unknown"},
+            "parking": {"garage", "parking_space", "street", "none", "unknown"},
+            "construction_stage": {"completed", "act15", "act14", "off_plan", "unknown"},
+            "land_status": {"regulated", "agricultural", "unregulated", "unknown"},
+        }[info.field_name]
+        return cleaned if cleaned in allowed else "unknown"
+
     def trap_flags(self) -> List[str]:
         hard = [key for key in HARD_TRAP_KEYS if getattr(self, key)]
         soft = [key for key in SOFT_TRAP_KEYS if getattr(self, key)]
