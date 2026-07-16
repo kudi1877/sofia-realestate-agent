@@ -147,6 +147,13 @@ def _source_metrics(
     return metrics
 
 
+# Sources whose per-m² medians are structurally meaningless for drift
+# detection (TIN-515): property.bg lists whole development projects —
+# €33M buildings produce a €44,870/m² "median" that would red-flag on any
+# ordinary daily variation. Their scraped COUNT is still monitored.
+PRICE_DRIFT_EXCLUDED_SOURCES = {"propertybg"}
+
+
 def _source_drift_checks(
     checks: List[Dict[str, Any]],
     source_metrics: Dict[str, Dict[str, Any]],
@@ -161,6 +168,8 @@ def _source_drift_checks(
             ("scraped", "scraped count", "listings"),
             ("median_price_per_sqm", "median EUR/m2", "EUR/m2"),
         ):
+            if field == "median_price_per_sqm" and source in PRICE_DRIFT_EXCLUDED_SOURCES:
+                continue
             value = current.get(field)
             if value is None:
                 continue

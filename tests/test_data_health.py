@@ -111,6 +111,37 @@ def test_source_count_and_median_drift_against_trailing_runs(tmp_path):
     assert health["source_metrics"]["imotbg"]["median_price_per_sqm"] == 2100.0
 
 
+def test_propertybg_price_drift_excluded_but_count_still_checked(tmp_path):
+    # TIN-515: property.bg lists whole buildings, so its EUR/m2 median is noise.
+    db = session()
+    db.add(listing("one", source="propertybg", price_per_sqm_eur=44870))
+    healthy_daily_artifacts(db, tmp_path)
+    db.commit()
+    previous_runs = [
+        {
+            "data_health": {
+                "source_metrics": {
+                    "propertybg": {"scraped": 50, "median_price_per_sqm": 2000}
+                }
+            }
+        }
+        for _ in range(7)
+    ]
+
+    health = evaluate_data_health(
+        db,
+        {"neighborhoods": []},
+        current_sources=[{"name": "property.bg", "scraped": 50}],
+        previous_runs=previous_runs,
+        data_dir=tmp_path,
+        now=NOW,
+    )
+    checks = {check["key"]: check for check in health["checks"]}
+
+    assert "source:propertybg:median_price_per_sqm" not in checks
+    assert checks["source:propertybg:scraped"]["status"] == "green"
+
+
 def test_health_failure_never_blocks_export(monkeypatch, tmp_path):
     db = session()
     data_dir = tmp_path / "data" / "dashboard"
