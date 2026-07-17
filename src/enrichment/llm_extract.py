@@ -220,7 +220,7 @@ Keep view/heating/red-flag text concise and in English. Return exactly the suppl
 Hunt for HIDDEN TRAPS a buyer would want flagged (set false only when truly absent):
 - net_area_sqm: if the text distinguishes чиста/жилищна площ from the headline обща/застроена площ (which may include балкони, тераси, общи части, таван, мазе), record the NET living area and list what the gross figure includes in gross_area_includes.
 - compensation_deal: the seller seeks обезщетение (builder compensation / срещу обезщетение) rather than a straight cash sale.
-- ideal_parts: selling идеални части — a fractional share, not the whole property.
+- ideal_parts: TRUE only when the SALE OBJECT is a fractional share — "продава/прехвърля идеални части от имота/апартамента", a co-ownership share. FALSE for the normal ownership note every Bulgarian flat carries: "идеални части от земята/парцела/сградата/общите части" that simply come WITH the whole apartment. If the ad sells a whole apartment (X-стаен апартамент), ideal_parts is FALSE even if it mentions идеални части от земята.
 - building_right_only: право на строеж / отстъпено право на строеж without land ownership.
 - non_residential_status: статут на ателие, таван, офис or similar — not legally a dwelling (жилище).
 - construction_stage: акт 14 / акт 15 = act14/act15; на зелено / в строеж without a completion act = off_plan; акт 16 or existing old building = completed.
