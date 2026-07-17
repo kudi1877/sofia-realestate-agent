@@ -119,13 +119,31 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
 
     # TIN-471: give EVERY listing a z-score, not just alert-flagged outliers.
     # Same-type groups only (tier 1→2, no cross-type fallback per TIN-468).
-    group_stats = calculate_neighborhood_stats(
-        [l for l in rows if l.is_active and l.listing_kind == "sale"]
-    )
+    active_sale_rows = [l for l in rows if l.is_active and l.listing_kind == "sale"]
+    group_stats = calculate_neighborhood_stats(active_sale_rows)
 
-    def _group_zscore(l: Listing) -> float | None:
+    # Tier-3 fallback (TIN-549): a citywide same-type baseline for sparse types
+    # (houses/plots/commercial rarely have 5 comparable listings in one
+    # neighborhood, so tiers 1-2 leave ~40-80% of them with no score). This is
+    # SAME-type only — never cross-type — and location varies more citywide, so
+    # it is flagged `zscore_basis="citywide"` for a coarser-signal tooltip and
+    # never drives is_deal (that stays on the neighborhood alert z-score).
+    citywide_by_type: Dict[str, List[float]] = defaultdict(list)
+    for l in active_sale_rows:
+        if l.property_type and l.price_per_sqm_eur and l.price_per_sqm_eur > 0:
+            citywide_by_type[l.property_type].append(float(l.price_per_sqm_eur))
+    citywide_stats: Dict[str, Dict[str, float]] = {}
+    for ptype, values in citywide_by_type.items():
+        if len(values) >= MIN_LISTINGS_PER_GROUP:
+            mean = sum(values) / len(values)
+            var = sum((v - mean) ** 2 for v in values) / len(values)
+            std = var ** 0.5
+            if std:
+                citywide_stats[ptype] = {"mean": mean, "std": std}
+
+    def _group_zscore(l: Listing) -> tuple[float | None, str | None]:
         if l.listing_kind != "sale" or not l.price_per_sqm_eur or l.price_per_sqm_eur <= 0:
-            return None
+            return None, None
         construction = l.construction_type or "unknown"
         for key in (
             (l.neighborhood, l.property_type, construction),
@@ -133,8 +151,11 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         ):
             g = group_stats.get(key)
             if g and g["std"]:
-                return round((float(l.price_per_sqm_eur) - g["mean"]) / g["std"], 3)
-        return None
+                return round((float(l.price_per_sqm_eur) - g["mean"]) / g["std"], 3), "neighborhood"
+        c = citywide_stats.get(l.property_type)
+        if c:
+            return round((float(l.price_per_sqm_eur) - c["mean"]) / c["std"], 3), "citywide"
+        return None, None
 
     listings: List[Dict[str, Any]] = []
     rental_stats = rent_stats_lookup(db)
@@ -176,7 +197,10 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
         )
         if deal_engine.startswith("hedonic") and l.residual_pct is not None:
             savings_pct = round(max(0.0, -float(l.residual_pct)), 1)
-        zscore = alert_zscore if alert_zscore is not None else _group_zscore(l)
+        if alert_zscore is not None:
+            zscore, zscore_basis = alert_zscore, "neighborhood"
+        else:
+            zscore, zscore_basis = _group_zscore(l)
         source_links = links_by_canonical.get(l.canonical_id, {})
         percentile = (
             _price_percentile(
@@ -232,6 +256,9 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     # (alert value preferred when one exists); is_deal marks only
                     # alert-qualified outliers and drives all deal UI.
                     "zscore": zscore,
+                    # "neighborhood" = compared to same-type nearby; "citywide"
+                    # = coarser fallback for sparse types (houses/plots/comm.).
+                    "zscore_basis": zscore_basis,
                     "savings_pct": savings_pct,
                     "is_deal": is_deal,
                     # When we first scraped this ad → effectively the "added on" date
