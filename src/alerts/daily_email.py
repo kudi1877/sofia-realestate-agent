@@ -32,6 +32,7 @@ from src.config import (
 )
 from src.analysis.hedonic import effective_deal_engine
 from src.database.models import Alert, Listing, get_db
+from src.enrichment.llm_extract import hard_traps
 from src.database.repository import ListingRepository
 from src.utils.time import utc_now
 
@@ -286,12 +287,30 @@ def _query_district_velocity(db: Session, days: int = 7) -> List[Dict[str, Any]]
     return districts[:8]
 
 
+def _top_pick_zscore(db: Session, listing: Listing) -> Optional[float]:
+    """Gate a Top Pick candidate (TIN-521): needs a photo, no hard traps, and
+    a numeric underpriced z-score — otherwise the digest card renders a
+    placeholder image and 'Z-score: N/A'. Returns the z-score or None."""
+    if not listing.image_url:
+        return None
+    if hard_traps(listing.llm_extract):
+        return None
+    alert = (
+        db.query(Alert)
+        .filter(Alert.listing_id == listing.id, Alert.alert_type == "underpriced", Alert.zscore.isnot(None))
+        .order_by(Alert.id.desc())
+        .first()
+    )
+    return float(alert.zscore) if alert else None
+
+
 def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
     """Best active unique apartment opportunity against its median baseline."""
     group_prices = _group_medians(db)
     engine = effective_deal_engine(DEAL_ENGINE)
+    top_zscore: Optional[float] = None
     if engine.startswith("hedonic"):
-        listing = db.query(Listing).filter(
+        candidates = db.query(Listing).filter(
             Listing.is_active.is_(True),
             _sale_listing_clause(),
             _unique_listing_clause(),
@@ -299,9 +318,16 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
             _sane_apartment_area_clause(),
             _authenticity_clause(),
             Listing.property_type == "apartment",
+            Listing.image_url.isnot(None),
             Listing.predicted_price_per_sqm.isnot(None),
             Listing.residual_pct <= HEDONIC_DEAL_RESIDUAL_PCT,
-        ).order_by(Listing.residual_pct.asc()).first()
+        ).order_by(Listing.residual_pct.asc()).limit(25).all()
+        listing = None
+        for candidate in candidates:
+            top_zscore = _top_pick_zscore(db, candidate)
+            if top_zscore is not None:
+                listing = candidate
+                break
         if listing is None:
             return None
         stored_savings_pct = max(0.0, -float(listing.residual_pct or 0))
@@ -312,7 +338,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
         )
         group_price = float(listing.predicted_price_per_sqm)
     else:
-        alert_row = db.query(Listing, Alert).join(Alert).filter(
+        alert_rows = db.query(Listing, Alert).join(Alert).filter(
             Listing.is_active.is_(True),
             _sale_listing_clause(),
             _unique_listing_clause(),
@@ -320,15 +346,20 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
             _sane_apartment_area_clause(),
             _authenticity_clause(),
             Listing.property_type == "apartment",
+            Listing.image_url.isnot(None),
             Alert.zscore < ANOMALY_ZSCORE_THRESHOLD,
             Alert.savings_pct > 0,
-        ).order_by(Alert.savings_pct.desc()).first()
+        ).order_by(Alert.savings_pct.desc()).limit(25).all()
 
-        if alert_row:
-            listing, alert = alert_row
-            stored_savings_pct = alert.savings_pct
-            stored_savings_eur = alert.savings_eur
-        else:
+        listing = None
+        for candidate, alert in alert_rows:
+            top_zscore = _top_pick_zscore(db, candidate)
+            if top_zscore is not None:
+                listing = candidate
+                stored_savings_pct = alert.savings_pct
+                stored_savings_eur = alert.savings_eur
+                break
+        if listing is None:
             candidates = db.query(Listing).filter(
                 Listing.is_active.is_(True),
                 _sale_listing_clause(),
@@ -337,21 +368,26 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
                 _sane_apartment_area_clause(),
                 _authenticity_clause(),
                 Listing.property_type == "apartment",
+                Listing.image_url.isnot(None),
                 Listing.price_per_sqm_eur > 0,
             ).all()
             candidates = [
-                listing for listing in candidates
-                if group_prices.get((listing.neighborhood, "apartment"), 0) > 0
+                row for row in candidates
+                if group_prices.get((row.neighborhood, "apartment"), 0) > 0
             ]
-            if not candidates:
-                return None
-            listing = min(
-                candidates,
+            candidates.sort(
                 key=lambda candidate: (
                     float(candidate.price_per_sqm_eur)
                     / group_prices[(candidate.neighborhood, "apartment")]
                 ),
             )
+            for candidate in candidates[:25]:
+                top_zscore = _top_pick_zscore(db, candidate)
+                if top_zscore is not None:
+                    listing = candidate
+                    break
+            if listing is None:
+                return None
             stored_savings_pct = None
             stored_savings_eur = None
 
@@ -390,6 +426,7 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
         reasons.append("Seller reduced price — motivated")
 
     return {
+        "id": listing.id,
         "neighborhood": listing.neighborhood or "Unknown",
         "rooms_text": _room_text(listing.rooms),
         "area_sqm": f"{listing.area_sqm or 0:.0f}",
@@ -400,6 +437,8 @@ def _query_top_pick(db: Session) -> Optional[Dict[str, Any]]:
         "savings_eur": _fmt_price(max(savings_eur, 0)),
         "reasoning": ". ".join(reasons) + ".",
         "url": listing.url or "#",
+        "image_url": listing.image_url,
+        "zscore": top_zscore,
     }
 
 

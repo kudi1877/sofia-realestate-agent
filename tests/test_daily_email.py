@@ -20,6 +20,7 @@ def listing(source_id: str, price_per_sqm: float, *, duplicate=False) -> Listing
         source="test",
         source_id=source_id,
         url=f"https://example.test/{source_id}",
+        image_url=f"https://images.example.test/{source_id}.jpg",
         title="Test listing",
         neighborhood="Люлин",
         property_type="apartment",
@@ -101,10 +102,13 @@ def test_daily_email_uses_shared_session_dedup_and_preserves_shapes(tmp_path, mo
         "name", "added", "sold", "avg_price", "velocity_score", "velocity_label",
     }
     assert set(context["top_pick"]) == {
-        "neighborhood", "rooms_text", "area_sqm", "construction_type",
+        "id", "neighborhood", "rooms_text", "area_sqm", "construction_type",
         "price_eur", "price_per_sqm", "savings_pct", "savings_eur",
-        "reasoning", "url",
+        "reasoning", "url", "image_url", "zscore",
     }
+    # TIN-521: the digest card must never render placeholder/N-A again.
+    assert context["top_pick"]["image_url"]
+    assert isinstance(context["top_pick"]["zscore"], float)
 
 
 def test_top_pick_rejects_implausible_apartment_price_per_sqm():
@@ -147,6 +151,9 @@ def test_daily_email_uses_hedonic_expectation_when_enabled(monkeypatch):
     row.predicted_price_per_sqm = 2000
     row.residual_pct = -20
     db.add(row)
+    db.flush()
+    # TIN-521: top pick requires a numeric underpriced z-score even under hedonic.
+    db.add(Alert(listing_id=row.id, alert_type="underpriced", zscore=-2.1, savings_pct=20))
     db.commit()
 
     monkeypatch.setattr(daily_email, "DEAL_ENGINE", "hedonic")
@@ -187,3 +194,32 @@ def test_daily_digest_excludes_low_authenticity_deals_and_price_drops():
     assert [deal["id"] for deal in deals] == [safe.id]
     assert top_pick["url"].endswith("/safe")
     assert price_drops == []
+
+
+def test_top_pick_skips_photoless_and_hard_trapped_candidates():
+    # TIN-521: the "best" candidate has no photo, the next hides a hard trap
+    # (идеални части); the gated pick is the third.
+    import json
+
+    db = session()
+    photoless = listing("photoless", 700)
+    photoless.image_url = None
+    trapped = listing("trapped", 800)
+    trapped.llm_extract = json.dumps({"ideal_parts": True})
+    clean = listing("clean", 900)
+    db.add_all([photoless, trapped, clean])
+    db.flush()
+    db.add_all(
+        [
+            Alert(listing_id=photoless.id, alert_type="underpriced", zscore=-5, savings_pct=70),
+            Alert(listing_id=trapped.id, alert_type="underpriced", zscore=-4, savings_pct=60),
+            Alert(listing_id=clean.id, alert_type="underpriced", zscore=-2, savings_pct=30),
+        ]
+    )
+    db.commit()
+
+    top_pick = daily_email._query_top_pick(db)
+
+    assert top_pick["url"].endswith("/clean")
+    assert top_pick["image_url"].endswith("/clean.jpg")
+    assert top_pick["zscore"] == -2.0
