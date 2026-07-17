@@ -267,6 +267,9 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     "auction_end": l.auction_end.isoformat() if l.auction_end else None,
                     "bailiff_name": l.bailiff_name,
                     "case_number": l.case_number,
+                    "llm_read_at": (
+                        l.llm_extracted_at.isoformat() if l.llm_extracted_at else None
+                    ),
                     "exposure": json.loads(l.exposure) if l.exposure else None,
                     "renovation_state": l.renovation_state,
                     "act16": l.act16,
