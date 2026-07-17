@@ -166,7 +166,7 @@ class FakeMoonshotClient:
         return httpx.Response(
             200,
             json={
-                "model": "kimi-k2.5",
+                "model": "kimi-k2.6",
                 "choices": [{"message": {"content": __import__("json").dumps(VALID)}}],
                 "usage": {"prompt_tokens": 2000, "cached_tokens": 1000, "completion_tokens": 200},
             },
@@ -176,16 +176,16 @@ class FakeMoonshotClient:
 
 def test_moonshot_provider_json_mode_and_cost_accounting():
     client = FakeMoonshotClient()
-    provider = MoonshotProvider(api_key="test-key", model="kimi-k2.5", client=client)
+    provider = MoonshotProvider(api_key="test-key", model="kimi-k2.6", client=client)
 
     result = provider.extract("A real description")
 
     assert client.url == "https://api.moonshot.ai/v1/chat/completions"
     assert client.payload["response_format"] == {"type": "json_object"}
-    assert result.model == "kimi-k2.5"
+    assert result.model == "kimi-k2.6"
     assert result.data["parking"] == "parking_space"
-    # 1000 uncached @0.60 + 1000 cached @0.15 + 200 out @2.50 per MTok
-    assert result.cost_usd == (1000 * 0.60 + 1000 * 0.15 + 200 * 2.50) / 1_000_000
+    # 1000 uncached @0.95 + 1000 cached @0.16 + 200 out @4.00 per MTok
+    assert result.cost_usd == (1000 * 0.95 + 1000 * 0.16 + 200 * 4.00) / 1_000_000
 
 
 def test_anthropic_cost_estimate_includes_prompt_cache_rates():

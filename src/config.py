@@ -55,16 +55,18 @@ LLM_DAILY_BUDGET_USD = float(os.getenv("LLM_DAILY_BUDGET_USD", "0.25"))
 ANTHROPIC_INPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_INPUT_USD_PER_MTOK", "1"))
 ANTHROPIC_OUTPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_OUTPUT_USD_PER_MTOK", "5"))
 
-# Moonshot (Kimi) — OpenAI-compatible API. Pricing defaults are the K2
-# list rates (verify on platform.moonshot.ai; overridable per env).
+# Moonshot (Kimi) — OpenAI-compatible API. Rates below are k2.6's published
+# card (platform.kimi.ai/docs/pricing/chat-k26, checked 2026-07-17): they are
+# NOT a saving over Haiku's $1/$5/$0.10-cached — k2.6 is ~5% cheaper on input
+# and 20% on output but 60% dearer on cache reads, and our prompt is cache
+# heavy. k3 is worse still at $3/$15. Kept as a working alternative, not a
+# cost win. k2.5 is the default nowhere: its pricing is unpublished.
 MOONSHOT_API_KEY = os.getenv("MOONSHOT_API_KEY", "")
 MOONSHOT_BASE_URL = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1")
-# kimi-k2-0905-preview was retired from the .ai catalog; k2.5 is the
-# cheapest general instruct tier there as of 2026-07 (others: k2.6, k3).
-MOONSHOT_MODEL = os.getenv("MOONSHOT_MODEL", "kimi-k2.5")
-MOONSHOT_INPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_INPUT_USD_PER_MTOK", "0.60"))
-MOONSHOT_CACHED_INPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_CACHED_INPUT_USD_PER_MTOK", "0.15"))
-MOONSHOT_OUTPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_OUTPUT_USD_PER_MTOK", "2.50"))
+MOONSHOT_MODEL = os.getenv("MOONSHOT_MODEL", "kimi-k2.6")
+MOONSHOT_INPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_INPUT_USD_PER_MTOK", "0.95"))
+MOONSHOT_CACHED_INPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_CACHED_INPUT_USD_PER_MTOK", "0.16"))
+MOONSHOT_OUTPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_OUTPUT_USD_PER_MTOK", "4.00"))
 
 # Hedonic model. sklearn is used when available; the repository's NumPy
 # fallback keeps training functional in the minimal production venv.
