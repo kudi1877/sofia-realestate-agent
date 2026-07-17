@@ -63,8 +63,35 @@ class HomesBgScraper:
             name = str(photo.get("name") or "")
             if name:
                 images.append(f"https://g1.homes.bg/{path}{name}o.jpg")
+
+        # TIN-520: the offer JSON carries structured attributes we previously
+        # discarded (floor='1-ви', total_floors, build_type='Тухла', ...).
+        floor_match = re.search(r"\d+", str(attributes.get("floor") or ""))
+        floor = int(floor_match.group()) if floor_match else (
+            0 if "партер" in str(attributes.get("floor") or "").lower() else None
+        )
+        floors_match = re.search(r"\d+", str(attributes.get("total_floors") or ""))
+        build_map = {"тухла": "brick", "панел": "panel", "епк": "epk"}
+        heat_map = {"тец": "central", "електричество": "electric", "газ": "gas", "локално": "local"}
+        # Order matters: "полуобзаведен"/"необзаведен" contain "обзаведен".
+        furniture_raw = str(attributes.get("furniture") or "").lower()
+        furnishing = None
+        for marker, value in (("полуобзаведен", "partial"), ("необзаведен", "unfurnished"), ("обзаведен", "furnished")):
+            if marker in furniture_raw:
+                furnishing = value
+                break
+        extras = {str(extra.get("name") or "").lower() for extra in offer.get("extras") or []}
+        parking = "garage" if "гараж" in extras else "parking_space" if "паркомясто" in extras else None
+
         return {
             "description_full": attributes.get("notes") or None,
+            "floor": floor,
+            "total_floors": int(floors_match.group()) if floors_match else None,
+            "construction_type": build_map.get(str(attributes.get("build_type") or "").lower()),
+            "heating": heat_map.get(str(attributes.get("heating") or "").lower()),
+            "furnishing": furnishing,
+            "has_elevator": True if "асансьор" in extras else None,
+            "parking": parking,
             "address": ", ".join(
                 str(value) for value in (address_data.get("city"),)
                 if value not in (None, "", 0)

@@ -148,6 +148,34 @@ def should_replace_existing(existing: Dict[str, Any], new: Dict[str, Any]) -> bo
     return False
 
 
+# Scalar attributes worth borrowing from a duplicate twin when the canonical
+# listing lacks them (TIN-520: an olx twin often carries year_built/floor the
+# homes.bg canonical doesn't). Higher-priority twins are consulted first.
+MERGEABLE_ATTRIBUTES = (
+    'floor',
+    'total_floors',
+    'construction_type',
+    'year_built',
+    'furnishing',
+    'heating',
+    'rooms',
+    'image_url',
+)
+
+
+def _backfill_missing_attributes(best: Dict[str, Any], duplicates: List[Dict[str, Any]]) -> None:
+    """Copy attributes the canonical listing is missing from its twins."""
+    donors = sorted(duplicates, key=lambda d: get_source_priority(d.get('source', '')))
+    for field in MERGEABLE_ATTRIBUTES:
+        if best.get(field) not in (None, '', 0):
+            continue
+        for donor in donors:
+            value = donor.get(field)
+            if value not in (None, '', 0):
+                best[field] = value
+                break
+
+
 @dataclass
 class DeduplicationResult:
     """Result of deduplication process."""
@@ -211,6 +239,7 @@ def deduplicate_listings(listings: List[Dict[str, Any]]) -> DeduplicationResult:
             best['is_duplicate'] = False
             best['duplicate_of'] = None
             best['duplicate_sources'] = [d.get('source') for d in duplicates]
+            _backfill_missing_attributes(best, duplicates)
             unique_listings.append(best)
             canonical_ids[best.get('source_id', '')] = canonical_id
             

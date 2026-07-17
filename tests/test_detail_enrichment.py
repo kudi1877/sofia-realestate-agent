@@ -64,7 +64,15 @@ def test_per_source_detail_parsers_follow_observed_markup():
         "data": {
             "offer": {
                 "address": {"city": "Център, София", "coordinates": [42.7, 23.3]},
-                "attributes": [{"key": "notes", "value": "Full homes description"}],
+                "attributes": [
+                    {"key": "notes", "value": "Full homes description"},
+                    {"key": "floor", "value": "1-ви"},
+                    {"key": "total_floors", "value": "5"},
+                    {"key": "build_type", "value": "Тухла"},
+                    {"key": "heating", "value": "Електричество"},
+                    {"key": "furniture", "value": "Необзаведен"},
+                ],
+                "extras": [{"name": "Асансьор"}, {"name": "Паркомясто"}],
                 "contacts": {"broker": {"name": "Broker", "phone": "0888123456"}, "agency": {"name": "Agency"}},
                 "photos": [{"path": "2026/", "name": "photo"}],
             }
@@ -79,6 +87,14 @@ def test_per_source_detail_parsers_follow_observed_markup():
     assert homes["description_full"] == "Full homes description"
     assert homes["latitude"] == 42.7
     assert homes["image_urls"] == ["https://g1.homes.bg/2026/photoo.jpg"]
+    # TIN-520: structured attributes must survive the parse.
+    assert homes["floor"] == 1
+    assert homes["total_floors"] == 5
+    assert homes["construction_type"] == "brick"
+    assert homes["heating"] == "electric"
+    assert homes["furnishing"] == "unfurnished"
+    assert homes["has_elevator"] is True
+    assert homes["parking"] == "parking_space"
 
     imot = ImotBgScraper.parse_detail(
         BeautifulSoup(

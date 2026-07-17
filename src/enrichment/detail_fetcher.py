@@ -276,6 +276,24 @@ def _apply_detail(listing: Listing, detail: Dict[str, object]) -> None:
         if value not in (None, ""):
             setattr(listing, field, value)
 
+    # TIN-520: structured attributes from the portal's own detail payload.
+    # Fill-only-when-empty: a value the search-result parse already set (or a
+    # human corrected) wins over the detail page; portal data wins over the
+    # LLM only by arriving first, since the LLM extractor also fills NULLs.
+    for field in (
+        "floor",
+        "total_floors",
+        "construction_type",
+        "year_built",
+        "heating",
+        "furnishing",
+        "has_elevator",
+        "parking",
+    ):
+        value = detail.get(field)
+        if value not in (None, "") and getattr(listing, field, None) in (None, ""):
+            setattr(listing, field, value)
+
     raw_phone = detail.get("contact_phone")
     phone = normalize_bulgarian_phone(str(raw_phone) if raw_phone else None)
     if phone:

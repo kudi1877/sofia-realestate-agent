@@ -88,3 +88,34 @@ def test_deduplication_result_exposes_flagged_duplicate_listings():
     assert result.duplicate_listings == [duplicate]
     assert duplicate["is_duplicate"] is True
     assert duplicate["duplicate_of"] == "imotiinfo-1"
+
+
+def test_canonical_listing_borrows_missing_attributes_from_twin():
+    # TIN-520: an olx twin often carries year_built/floor the canonical lacks.
+    winner = listing(source="homesbg", source_id="homesbg-1", floor=None, year_built=None)
+    twin = listing(
+        source="olx",
+        source_id="olx-1",
+        floor=1,
+        total_floors=5,
+        year_built=2026,
+        construction_type="brick",
+    )
+
+    result = deduplicate_listings([winner, twin])
+
+    assert result.unique_listings == [winner]
+    assert winner["floor"] == 1
+    assert winner["total_floors"] == 5
+    assert winner["year_built"] == 2026
+    assert winner["construction_type"] == "brick"
+
+
+def test_backfill_never_overwrites_existing_canonical_values():
+    winner = listing(source="homesbg", source_id="homesbg-1", floor=3, year_built=2010)
+    twin = listing(source="olx", source_id="olx-1", floor=1, year_built=2026)
+
+    deduplicate_listings([winner, twin])
+
+    assert winner["floor"] == 3
+    assert winner["year_built"] == 2010
