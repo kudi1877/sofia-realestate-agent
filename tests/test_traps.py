@@ -107,6 +107,16 @@ def test_improvised_enum_values_coerce_instead_of_failing():
     assert attrs.land_status == "unknown"
 
 
+def test_null_lists_coerce_to_empty():
+    # Kimi answers null where the schema wants an empty list (2026-07-17 A/B).
+    attrs = ExtractedAttributes.model_validate(
+        base(exposure=None, red_flags=None, gross_area_includes=None)
+    )
+    assert attrs.exposure == []
+    assert attrs.red_flags == []
+    assert attrs.gross_area_includes == []
+
+
 def test_unrecognized_gross_area_components_dropped_not_fatal():
     # 2026-07-16 run: 'internal_stairs' in gross_area_includes rejected the
     # whole billed extraction. Unknown list items must be filtered out.

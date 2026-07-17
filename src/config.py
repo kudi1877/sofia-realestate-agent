@@ -51,6 +51,17 @@ LLM_DAILY_BUDGET_USD = float(os.getenv("LLM_DAILY_BUDGET_USD", "2"))
 ANTHROPIC_INPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_INPUT_USD_PER_MTOK", "1"))
 ANTHROPIC_OUTPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_OUTPUT_USD_PER_MTOK", "5"))
 
+# Moonshot (Kimi) — OpenAI-compatible API. Pricing defaults are the K2
+# list rates (verify on platform.moonshot.ai; overridable per env).
+MOONSHOT_API_KEY = os.getenv("MOONSHOT_API_KEY", "")
+MOONSHOT_BASE_URL = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1")
+# kimi-k2-0905-preview was retired from the .ai catalog; k2.5 is the
+# cheapest general instruct tier there as of 2026-07 (others: k2.6, k3).
+MOONSHOT_MODEL = os.getenv("MOONSHOT_MODEL", "kimi-k2.5")
+MOONSHOT_INPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_INPUT_USD_PER_MTOK", "0.60"))
+MOONSHOT_CACHED_INPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_CACHED_INPUT_USD_PER_MTOK", "0.15"))
+MOONSHOT_OUTPUT_USD_PER_MTOK = float(os.getenv("MOONSHOT_OUTPUT_USD_PER_MTOK", "2.50"))
+
 # Hedonic model. sklearn is used when available; the repository's NumPy
 # fallback keeps training functional in the minimal production venv.
 HEDONIC_MODEL_DIR = Path(os.getenv("HEDONIC_MODEL_DIR", str(DATA_DIR / "models"))).expanduser()

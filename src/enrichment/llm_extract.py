@@ -22,6 +22,12 @@ from src.config import (
     LLM_PROVIDER,
     LOCAL_LLM_BASE_URL,
     LOCAL_LLM_MODEL,
+    MOONSHOT_API_KEY,
+    MOONSHOT_BASE_URL,
+    MOONSHOT_CACHED_INPUT_USD_PER_MTOK,
+    MOONSHOT_INPUT_USD_PER_MTOK,
+    MOONSHOT_MODEL,
+    MOONSHOT_OUTPUT_USD_PER_MTOK,
 )
 from src.database.models import Listing
 from src.utils.time import utc_now
@@ -78,6 +84,13 @@ class ExtractedAttributes(BaseModel):
     swap_only: bool = False
     # For plots: земеделска земя / извън регулация needs status conversion.
     land_status: Literal["regulated", "agricultural", "unregulated", "unknown"] = "unknown"
+
+    @field_validator("exposure", "red_flags", "gross_area_includes", mode="before")
+    @classmethod
+    def null_list_to_empty(cls, value):
+        # Kimi answers null where the schema wants an empty list — 9 of 40
+        # billed extractions failed on this in the 2026-07-17 A/B run.
+        return [] if value is None else value
 
     @field_validator("exposure")
     @classmethod
@@ -303,11 +316,81 @@ class LocalProvider:
         return ProviderResult(data=json.loads(content), model=self.model, cost_usd=0.0)
 
 
+class MoonshotProvider:
+    """Kimi via Moonshot's OpenAI-compatible chat API (LLM_PROVIDER=moonshot)."""
+
+    name = "moonshot"
+
+    def __init__(
+        self,
+        api_key: str = MOONSHOT_API_KEY,
+        base_url: str = MOONSHOT_BASE_URL,
+        model: str = MOONSHOT_MODEL,
+        client: httpx.Client | None = None,
+    ):
+        if not api_key:
+            raise ValueError("MOONSHOT_API_KEY is not configured")
+        self.url = f"{base_url.rstrip('/')}/chat/completions"
+        self.model = model
+        self.client = client or httpx.Client(
+            timeout=90, headers={"Authorization": f"Bearer {api_key}"}
+        )
+
+    def extract(self, description: str) -> ProviderResult:
+        response = self.client.post(
+            self.url,
+            json={
+                "model": self.model,
+                # Current Kimi models are reasoning models: default mode burns
+                # ~1000-1500 thinking tokens and 30-50s per listing. Probed
+                # 2026-07-17: reasoning_effort "none" switches to direct
+                # answers and then the API mandates temperature 0.6.
+                "reasoning_effort": "none",
+                "temperature": 0.6,
+                "max_tokens": 800,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Return JSON matching this schema:\n"
+                            f"{json.dumps(ExtractedAttributes.model_json_schema())}\n\n"
+                            f"Listing:\n{description[:12000]}"
+                        ),
+                    },
+                ],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content = payload["choices"][0]["message"]["content"].strip()
+        if content.startswith("```"):
+            content = content.strip("`")
+            content = content.removeprefix("json").strip()
+        usage = payload.get("usage") or {}
+        prompt_tokens = float(usage.get("prompt_tokens") or 0)
+        cached_tokens = float(usage.get("cached_tokens") or 0)
+        completion_tokens = float(usage.get("completion_tokens") or 0)
+        cost = (
+            (prompt_tokens - cached_tokens) * MOONSHOT_INPUT_USD_PER_MTOK
+            + cached_tokens * MOONSHOT_CACHED_INPUT_USD_PER_MTOK
+            + completion_tokens * MOONSHOT_OUTPUT_USD_PER_MTOK
+        ) / 1_000_000
+        return ProviderResult(
+            data=json.loads(content),
+            model=str(payload.get("model") or self.model),
+            cost_usd=cost,
+        )
+
+
 def build_provider(name: str = LLM_PROVIDER) -> ExtractionProvider | None:
     if name == "off":
         return None
     if name == "anthropic":
         return AnthropicProvider()
+    if name == "moonshot":
+        return MoonshotProvider()
     if name == "local":
         return LocalProvider()
     raise ValueError(f"Unsupported LLM_PROVIDER: {name}")
@@ -401,7 +484,18 @@ def extract_listing_attributes(
                 # of burning hours retrying per listing (the 2026-07-13 backlog
                 # run wasted ~5,400 attempts against an empty credit balance).
                 message = str(exc).lower()
-                if "credit balance" in message or "authentication" in message or "invalid x-api-key" in message:
+                if any(
+                    marker in message
+                    for marker in (
+                        "credit balance",
+                        "authentication",
+                        "invalid x-api-key",
+                        # Moonshot phrasings for the same account-level failures
+                        "401 unauthorized",
+                        "insufficient balance",
+                        "account is suspended",
+                    )
+                ):
                     logger.error(f"LLM provider unusable, aborting batch: {exc}")
                     provider_dead = True
                     break

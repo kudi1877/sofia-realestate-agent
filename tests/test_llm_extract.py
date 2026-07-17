@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from src.database.models import Base, Listing
 from src.enrichment.llm_extract import (
     LocalProvider,
+    MoonshotProvider,
     ProviderResult,
     estimate_anthropic_cost,
     extract_listing_attributes,
@@ -152,6 +153,39 @@ def test_local_provider_uses_openai_compatible_json_mode():
     assert client.payload["response_format"] == {"type": "json_object"}
     assert result.model == "local-test"
     assert result.data["parking"] == "parking_space"
+
+
+class FakeMoonshotClient:
+    def __init__(self):
+        self.url = None
+        self.payload = None
+
+    def post(self, url, json):
+        self.url = url
+        self.payload = json
+        return httpx.Response(
+            200,
+            json={
+                "model": "kimi-k2.5",
+                "choices": [{"message": {"content": __import__("json").dumps(VALID)}}],
+                "usage": {"prompt_tokens": 2000, "cached_tokens": 1000, "completion_tokens": 200},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+def test_moonshot_provider_json_mode_and_cost_accounting():
+    client = FakeMoonshotClient()
+    provider = MoonshotProvider(api_key="test-key", model="kimi-k2.5", client=client)
+
+    result = provider.extract("A real description")
+
+    assert client.url == "https://api.moonshot.ai/v1/chat/completions"
+    assert client.payload["response_format"] == {"type": "json_object"}
+    assert result.model == "kimi-k2.5"
+    assert result.data["parking"] == "parking_space"
+    # 1000 uncached @0.60 + 1000 cached @0.15 + 200 out @2.50 per MTok
+    assert result.cost_usd == (1000 * 0.60 + 1000 * 0.15 + 200 * 2.50) / 1_000_000
 
 
 def test_anthropic_cost_estimate_includes_prompt_cache_rates():
