@@ -161,3 +161,24 @@ def test_anthropic_cost_estimate_includes_prompt_cache_rates():
         cache_write_tokens=1_000_000,
         cache_read_tokens=1_000_000,
     ) == 7.35
+
+
+def test_short_description_rows_are_selected_when_full_is_missing():
+    # olx/bazar/alo have no detail fetcher — their text lives only in the
+    # short `description` column. Listing 35722 (olx, 282 m² headline hiding
+    # a 115 m² apartment) was never AI-read because of this.
+    db = session()
+    olx_row = listing("olx-1", "")
+    olx_row.description = "Четиристаен апартамент с площ 115 кв.м, партерен етаж с двор."
+    empty_row = listing("empty", "")
+    empty_row.description = None
+    db.add_all([olx_row, empty_row])
+    db.commit()
+    provider = MockProvider()
+
+    summary = extract_listing_attributes(db, provider=provider, max_per_run=10, budget_usd=2)
+
+    assert summary["selected"] == 1
+    assert summary["extracted"] == 1
+    assert olx_row.llm_extracted_at is not None
+    assert empty_row.llm_extracted_at is None

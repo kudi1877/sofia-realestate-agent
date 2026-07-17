@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Protocol
 import httpx
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from src.config import (
@@ -361,8 +361,14 @@ def extract_listing_attributes(
         .filter(
             Listing.is_active.is_(True),
             or_(Listing.is_duplicate.is_(False), Listing.is_duplicate.is_(None)),
-            Listing.description_full.isnot(None),
-            Listing.description_full != "",
+            # olx/bazar/alo have no detail fetcher, so their text lives in the
+            # short `description` column — description_full alone silently
+            # excluded them from every AI read (found via listing 35722, an
+            # olx ad whose 282 m² headline hides a 115 m² apartment).
+            or_(
+                and_(Listing.description_full.isnot(None), Listing.description_full != ""),
+                and_(Listing.description.isnot(None), Listing.description != ""),
+            ),
             or_(
                 Listing.llm_extracted_at.is_(None),
                 Listing.enriched_at > Listing.llm_extracted_at,
@@ -385,7 +391,7 @@ def extract_listing_attributes(
         result = None
         for attempt in range(2):
             try:
-                result = provider.extract(row.description_full)
+                result = provider.extract(row.description_full or row.description)
                 spent += max(0.0, float(result.cost_usd))
                 attributes = ExtractedAttributes.model_validate(result.data)
                 break
