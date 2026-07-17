@@ -9,10 +9,11 @@ from typing import Any, Dict, List, Literal, Protocol
 import httpx
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import Session
 
 from src.config import (
+    ANOMALY_ZSCORE_THRESHOLD,
     ANTHROPIC_API_KEY,
     ANTHROPIC_INPUT_USD_PER_MTOK,
     ANTHROPIC_LLM_MODEL,
@@ -29,8 +30,17 @@ from src.config import (
     MOONSHOT_MODEL,
     MOONSHOT_OUTPUT_USD_PER_MTOK,
 )
-from src.database.models import Listing
+from src.database.models import Alert, Listing
 from src.utils.time import utc_now
+
+
+def _is_deal_clause():
+    """True for listings an underpriced alert already flagged."""
+    return exists().where(
+        Alert.listing_id == Listing.id,
+        Alert.alert_type == "underpriced",
+        Alert.zscore <= ANOMALY_ZSCORE_THRESHOLD,
+    )
 
 
 Exposure = Literal[
@@ -457,7 +467,11 @@ def extract_listing_attributes(
                 Listing.enriched_at > Listing.llm_extracted_at,
             ),
         )
-        .order_by(Listing.llm_extracted_at.asc(), Listing.enriched_at.asc(), Listing.id.asc())
+        # Deals first, then newest. Reading a listing costs money and only
+        # pays off where you'd act: a trap on an ad you'd never open is worth
+        # nothing. Oldest-first ordering spent the whole daily budget on
+        # backlog every night instead of on today's deals.
+        .order_by(_is_deal_clause().desc(), Listing.first_seen.desc(), Listing.id.desc())
         .limit(max_per_run)
         .all()
     )

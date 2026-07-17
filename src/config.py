@@ -46,8 +46,12 @@ if LLM_PROVIDER == "anthropic" and not ANTHROPIC_API_KEY:
 ANTHROPIC_LLM_MODEL = os.getenv("ANTHROPIC_LLM_MODEL", "claude-haiku-4-5")
 LOCAL_LLM_BASE_URL = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1")
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen2.5:7b")
-LLM_MAX_PER_RUN = int(os.getenv("LLM_MAX_PER_RUN", "300"))
-LLM_DAILY_BUDGET_USD = float(os.getenv("LLM_DAILY_BUDGET_USD", "2"))
+# Nightly reads are deals-first (see llm_extract), so a small cap still
+# covers every new deal (~19/day) plus the freshest ads. $2/day was sized
+# for the one-time backlog and would bill ~$60/month forever; $0.25 lands
+# around $3-7/month. Raise via env for a deliberate catch-up run.
+LLM_MAX_PER_RUN = int(os.getenv("LLM_MAX_PER_RUN", "60"))
+LLM_DAILY_BUDGET_USD = float(os.getenv("LLM_DAILY_BUDGET_USD", "0.25"))
 ANTHROPIC_INPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_INPUT_USD_PER_MTOK", "1"))
 ANTHROPIC_OUTPUT_USD_PER_MTOK = float(os.getenv("ANTHROPIC_OUTPUT_USD_PER_MTOK", "5"))
 

@@ -6,7 +6,7 @@ import httpx
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.database.models import Base, Listing
+from src.database.models import Alert, Base, Listing
 from src.enrichment.llm_extract import (
     LocalProvider,
     MoonshotProvider,
@@ -195,6 +195,25 @@ def test_anthropic_cost_estimate_includes_prompt_cache_rates():
         cache_write_tokens=1_000_000,
         cache_read_tokens=1_000_000,
     ) == 7.35
+
+
+def test_deals_are_read_before_older_backlog_within_budget():
+    # A small daily budget must buy today's deals, not the oldest backlog:
+    # a trap on an ad you would never open is worth nothing.
+    db = session()
+    old_backlog = listing("old", "Old unread listing", first_seen=NOW - timedelta(days=100))
+    fresh_deal = listing("deal", "Fresh underpriced listing", first_seen=NOW - timedelta(hours=2))
+    db.add_all([old_backlog, fresh_deal])
+    db.flush()
+    db.add(Alert(listing_id=fresh_deal.id, alert_type="underpriced", zscore=-2.5, savings_pct=30))
+    db.commit()
+    # One read exhausts the budget, so only the first-ordered row is bought.
+    provider = MockProvider(cost=0.3)
+
+    extract_listing_attributes(db, provider=provider, max_per_run=60, budget_usd=0.25)
+
+    assert fresh_deal.llm_extracted_at is not None
+    assert old_backlog.llm_extracted_at is None
 
 
 def test_short_description_rows_are_selected_when_full_is_missing():
