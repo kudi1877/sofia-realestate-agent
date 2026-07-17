@@ -88,6 +88,9 @@ def gross_yield_pct(
     """Estimate annual gross yield from same-room rent, then neighborhood rent."""
     if (
         listing.listing_kind != "sale"
+        # Rent stats come from apartment rentals — applying them to plots or
+        # houses produced 300%+ "yields" on the dashboard (TIN-523).
+        or listing.property_type != "apartment"
         or not listing.neighborhood
         or not listing.area_sqm
         or not listing.price_eur
@@ -106,4 +109,8 @@ def gross_yield_pct(
         if hasattr(rent_stat, "median_rent_per_sqm")
         else rent_stat["median"]
     )
-    return round(float(rent_per_sqm) * 12 * float(listing.area_sqm) / float(listing.price_eur) * 100, 2)
+    yield_pct = round(float(rent_per_sqm) * 12 * float(listing.area_sqm) / float(listing.price_eur) * 100, 2)
+    # Sofia gross yields run 4-8%; anything past 25% means the listing price
+    # is not a whole-property price (part payment, trap, data error) — hide
+    # rather than rank garbage at the top of the yield sort.
+    return yield_pct if yield_pct <= 25 else None

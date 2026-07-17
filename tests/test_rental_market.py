@@ -83,6 +83,27 @@ def test_gross_yield_prefers_room_bucket_and_falls_back_to_neighborhood():
     assert gross_yield_pct(listing("sale-fallback", kind="sale", rooms=3), stats) == 4.8
 
 
+def test_gross_yield_only_for_apartments_and_plausible_values():
+    # TIN-523: apartment rent medians applied to plots produced 300%+ "yields"
+    # that topped the dashboard's yield sort.
+    db = session()
+    db.add(
+        NeighborhoodRentStats(
+            neighborhood="Люлин", rooms_bucket="all", median_rent_per_sqm=8, listing_count=20
+        )
+    )
+    db.commit()
+    stats = rent_stats_lookup(db)
+
+    plot = listing("plot", kind="sale")
+    plot.property_type = "plot"
+    assert gross_yield_pct(plot, stats) is None
+
+    implausible = listing("cheap", kind="sale")
+    implausible.price_eur = 10000  # 48% "yield" — not a whole-property price
+    assert gross_yield_pct(implausible, stats) is None
+
+
 def test_imot_rent_parser_emits_separate_source_and_kind():
     soup = BeautifulSoup(
         """
