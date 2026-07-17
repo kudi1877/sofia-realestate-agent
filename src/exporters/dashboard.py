@@ -212,6 +212,9 @@ def _build_listings_payload(db: Session) -> Dict[str, Any]:
                     "construction_type": l.construction_type,
                     "floor": l.floor,
                     "total_floors": l.total_floors,
+                    "year_built": l.year_built,
+                    "heating": l.heating,
+                    "furnishing": l.furnishing,
                     "price_changes": l.price_changes or 0,
                     "site_count": max(1, len(source_links)),
                     "cross_source_links": (
