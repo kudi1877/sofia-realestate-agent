@@ -50,6 +50,7 @@ from src.enrichment.llm_extract import (
     AnthropicProvider,
     ExtractionProvider,
     LocalProvider,
+    MoonshotProvider,
     ProviderResult,
     build_provider,
 )
@@ -165,9 +166,15 @@ def build_municipal_provider(name: str = LLM_PROVIDER) -> MunicipalProvider | No
         return None
     if isinstance(provider, AnthropicProvider):
         return AnthropicMunicipalProvider(provider)
-    if isinstance(provider, LocalProvider):
+    # Moonshot (Kimi) speaks the same OpenAI-compatible chat API as the local
+    # provider — same .client/.url/.model — so it reuses that path. Switching
+    # LLM_PROVIDER=moonshot otherwise crashed the whole nightly here (2026-07-20).
+    if isinstance(provider, (LocalProvider, MoonshotProvider)):
         return LocalMunicipalProvider(provider)
-    raise TypeError(f"Unsupported municipal provider: {type(provider).__name__}")
+    logger.warning(
+        f"Municipal notices skipped: no adapter for {type(provider).__name__}"
+    )
+    return None
 
 
 def is_watch_day(now: datetime | None = None, weekday: int = MUNICIPAL_WATCH_WEEKDAY) -> bool:
