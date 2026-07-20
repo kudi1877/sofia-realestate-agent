@@ -287,6 +287,9 @@ class AnthropicProvider:
 
 class LocalProvider:
     name = "local"
+    # Sampling params every OpenAI-compatible call site should send for this
+    # provider (see MoonshotProvider.chat_defaults for why this isn't shared).
+    chat_defaults = {"temperature": 0}
 
     def __init__(
         self,
@@ -330,6 +333,12 @@ class MoonshotProvider:
     """Kimi via Moonshot's OpenAI-compatible chat API (LLM_PROVIDER=moonshot)."""
 
     name = "moonshot"
+    # Current Kimi models are reasoning models: default mode burns ~1000-1500
+    # thinking tokens and 30-50s per call. Probed 2026-07-17: reasoning_effort
+    # "none" switches to direct answers, and the API then MANDATES
+    # temperature 0.6 — sending 0 returns 400 (which broke the municipal
+    # watcher on 2026-07-20). Every call site must send these together.
+    chat_defaults = {"reasoning_effort": "none", "temperature": 0.6}
 
     def __init__(
         self,
@@ -351,12 +360,7 @@ class MoonshotProvider:
             self.url,
             json={
                 "model": self.model,
-                # Current Kimi models are reasoning models: default mode burns
-                # ~1000-1500 thinking tokens and 30-50s per listing. Probed
-                # 2026-07-17: reasoning_effort "none" switches to direct
-                # answers and then the API mandates temperature 0.6.
-                "reasoning_effort": "none",
-                "temperature": 0.6,
+                **self.chat_defaults,
                 "max_tokens": 800,
                 "response_format": {"type": "json_object"},
                 "messages": [

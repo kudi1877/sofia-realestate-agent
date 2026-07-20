@@ -139,7 +139,8 @@ class LocalMunicipalProvider:
             self.base.url,
             json={
                 "model": self.base.model,
-                "temperature": 0,
+                # Provider-specific sampling params (Kimi 400s on temperature 0).
+                **getattr(self.base, "chat_defaults", {"temperature": 0}),
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {"role": "system", "content": MUNICIPAL_SYSTEM_PROMPT},
